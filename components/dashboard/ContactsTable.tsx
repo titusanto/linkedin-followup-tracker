@@ -159,14 +159,14 @@ export function ContactsTable({ contacts, loading }: ContactsTableProps) {
                       >
                         {contact.name}
                       </Link>
-                      <div className="text-xs text-gray-400 dark:text-gray-500 truncate max-w-[140px]">
+                      <div className="text-xs text-gray-400 dark:text-gray-500 truncate max-w-[180px]" title={[contact.role, contact.company].filter(Boolean).join(" · ")}>
                         {contact.role
-                          ? contact.role.length > 30
-                            ? contact.role.slice(0, 30) + "…"
+                          ? contact.role.length > 35
+                            ? contact.role.slice(0, 35) + "…"
                             : contact.role
                           : contact.company
                           ? contact.company
-                          : <span className="text-gray-300 dark:text-gray-700">No role</span>
+                          : <span className="text-gray-300 dark:text-gray-700">—</span>
                         }
                       </div>
                     </div>

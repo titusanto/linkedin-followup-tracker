@@ -1,249 +1,294 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   CheckCircle,
   Chrome,
   Puzzle,
-  Link2,
   ArrowRight,
+  ArrowDown,
   FolderOpen,
   ExternalLink,
   Download,
+  ChevronLeft,
 } from "lucide-react";
 
 export default function OnboardingPage() {
-  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
-  const [autoDownloaded, setAutoDownloaded] = useState(false);
+  const [step, setStep] = useState(1);
+  const [downloaded, setDownloaded] = useState(false);
 
-  // Auto-download the extension zip as soon as the page loads — no click needed
+  // Auto-download the extension on load
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const t = setTimeout(() => {
       const a = document.createElement("a");
       a.href = "/linkedfollow-extension-v2.zip";
       a.download = "linkedfollow-extension-v2.zip";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setAutoDownloaded(true);
-      setCompletedSteps((prev) => (prev.includes(1) ? prev : [...prev, 1]));
+      setDownloaded(true);
     }, 600);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, []);
 
-  function toggleStep(n: number) {
-    setCompletedSteps((prev) =>
-      prev.includes(n) ? prev.filter((s) => s !== n) : [...prev, n]
-    );
-  }
+  // Auto-advance from step 1 after download completes
+  useEffect(() => {
+    if (downloaded && step === 1) {
+      const t = setTimeout(() => setStep(2), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [downloaded, step]);
 
-  const allDone = completedSteps.length >= 4;
+  const next = useCallback(() => setStep((s) => Math.min(s + 1, 4)), []);
+  const back = useCallback(() => setStep((s) => Math.max(s - 1, 1)), []);
+
+  const totalSteps = 4;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 px-4 py-12">
-      <div className="max-w-lg mx-auto">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col items-center justify-center px-4 py-10">
+      <div className="w-full max-w-md">
 
         {/* Header */}
-        <div className="text-center mb-8">
-          <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-            <span className="text-white font-bold text-xl">LF</span>
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg">
+            <span className="text-white font-bold text-lg">LF</span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Install the Extension</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            {autoDownloaded ? "✓ Download started — follow the 4 steps below" : "Starting download…"}
-          </p>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Set up LinkedFollow</h1>
         </div>
 
-        {/* Steps */}
-        <div className="space-y-3">
-
-          {/* Step 1 — auto done */}
-          <div
-            onClick={() => toggleStep(1)}
-            className={`flex items-start gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
-              completedSteps.includes(1)
-                ? "border-green-400 bg-green-50 dark:bg-green-950/30"
-                : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900"
-            }`}
-          >
-            <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
-              completedSteps.includes(1) ? "bg-green-500 text-white" : "bg-blue-50 dark:bg-blue-950 text-blue-600"
-            }`}>
-              {completedSteps.includes(1) ? <CheckCircle className="w-5 h-5" /> : <Download className="w-5 h-5" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[11px] font-medium text-gray-400">Step 1</span>
-                {completedSteps.includes(1) && <span className="text-[11px] font-semibold text-green-600 dark:text-green-400">✓ Done</span>}
-              </div>
-              <p className="font-semibold text-sm text-gray-900 dark:text-white mb-1">
-                {autoDownloaded ? "Extension downloaded!" : "Downloading extension…"}
-              </p>
-              <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed" onClick={(e) => e.stopPropagation()}>
-                Unzip it — you&apos;ll get a folder called{" "}
-                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension-v2</code>.
-                <br />
-                <a
-                  href="/linkedfollow-extension-v2.zip"
-                  download="linkedfollow-extension-v2.zip"
-                  className="inline-flex items-center gap-1 mt-1.5 text-blue-600 hover:underline font-medium"
-                >
-                  <Download className="w-3 h-3" /> Download again if needed
-                </a>
-              </div>
-            </div>
-          </div>
-
-          {/* Step 2 — direct link button */}
-          <div
-            onClick={() => toggleStep(2)}
-            className={`flex items-start gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
-              completedSteps.includes(2)
-                ? "border-green-400 bg-green-50 dark:bg-green-950/30"
-                : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:border-blue-300"
-            }`}
-          >
-            <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
-              completedSteps.includes(2) ? "bg-green-500 text-white" : "bg-blue-50 dark:bg-blue-950 text-blue-600"
-            }`}>
-              {completedSteps.includes(2) ? <CheckCircle className="w-5 h-5" /> : <Chrome className="w-5 h-5" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[11px] font-medium text-gray-400">Step 2</span>
-                {completedSteps.includes(2) && <span className="text-[11px] font-semibold text-green-600 dark:text-green-400">✓ Done</span>}
-              </div>
-              <p className="font-semibold text-sm text-gray-900 dark:text-white mb-1">Open Chrome Extensions &amp; enable Developer Mode</p>
-              <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed" onClick={(e) => e.stopPropagation()}>
-                Click the button below — it takes you directly there. Then turn on the <strong>Developer mode</strong> toggle (top-right corner).
-                <br />
-                <a
-                  href="/open-extensions.html"
-                  target="_blank"
-                  rel="noopener"
-                  className="inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-colors"
-                  onClick={(e) => { e.stopPropagation(); if (!completedSteps.includes(2)) toggleStep(2); }}
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Open chrome://extensions →
-                </a>
-              </div>
-            </div>
-          </div>
-
-          {/* Step 3 */}
-          <div
-            onClick={() => toggleStep(3)}
-            className={`flex items-start gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
-              completedSteps.includes(3)
-                ? "border-green-400 bg-green-50 dark:bg-green-950/30"
-                : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:border-blue-300"
-            }`}
-          >
-            <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
-              completedSteps.includes(3) ? "bg-green-500 text-white" : "bg-blue-50 dark:bg-blue-950 text-blue-600"
-            }`}>
-              {completedSteps.includes(3) ? <CheckCircle className="w-5 h-5" /> : <FolderOpen className="w-5 h-5" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[11px] font-medium text-gray-400">Step 3</span>
-                {completedSteps.includes(3) && <span className="text-[11px] font-semibold text-green-600 dark:text-green-400">✓ Done</span>}
-              </div>
-              <p className="font-semibold text-sm text-gray-900 dark:text-white mb-1">Load the extension folder</p>
-              <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-                Click <strong>&ldquo;Load unpacked&rdquo;</strong> and select the{" "}
-                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension-v2</code> folder.
-                <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1.5">
-                  <Puzzle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  <span>Select the <strong>folder</strong> itself — not a file inside it.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Step 4 */}
-          <div
-            onClick={() => toggleStep(4)}
-            className={`flex items-start gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer ${
-              completedSteps.includes(4)
-                ? "border-green-400 bg-green-50 dark:bg-green-950/30"
-                : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:border-blue-300"
-            }`}
-          >
-            <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
-              completedSteps.includes(4) ? "bg-green-500 text-white" : "bg-blue-50 dark:bg-blue-950 text-blue-600"
-            }`}>
-              {completedSteps.includes(4) ? <CheckCircle className="w-5 h-5" /> : <Link2 className="w-5 h-5" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[11px] font-medium text-gray-400">Step 4</span>
-                {completedSteps.includes(4) && <span className="text-[11px] font-semibold text-green-600 dark:text-green-400">✓ Done</span>}
-              </div>
-              <p className="font-semibold text-sm text-gray-900 dark:text-white mb-1">Connect — just paste your User ID</p>
-              <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed" onClick={(e) => e.stopPropagation()}>
-                Click the <strong>LinkedFollow icon</strong> in your Chrome toolbar.
-                Only your <strong>User ID</strong> is needed — the URL and API secret are already built in.
-                <br />
-                <Link
-                  href="/dashboard/settings"
-                  target="_blank"
-                  className="inline-flex items-center gap-1 mt-1.5 text-blue-600 hover:underline font-medium"
-                >
-                  Get your User ID from Settings <ArrowRight className="w-3 h-3" />
-                </Link>
-              </div>
-            </div>
-          </div>
-
+        {/* Progress dots */}
+        <div className="flex items-center justify-center gap-2 mb-6">
+          {Array.from({ length: totalSteps }, (_, i) => i + 1).map((n) => (
+            <div
+              key={n}
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                n <= step
+                  ? "w-8 bg-blue-500"
+                  : "w-4 bg-gray-200 dark:bg-gray-800"
+              }`}
+            />
+          ))}
+          <span className="text-[10px] text-gray-400 ml-1.5 tabular-nums">{step}/{totalSteps}</span>
         </div>
 
-        {/* User ID helper */}
-        <div className="mt-5 p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-2xl">
-          <p className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-1">🔑 Where&apos;s my User ID?</p>
-          <p className="text-xs text-blue-700 dark:text-blue-400 mb-3">
-            Open Settings — your User ID has a one-click copy button. Just paste it in the extension popup. No other credentials needed.
-          </p>
-          <Link
-            href="/dashboard/settings"
-            target="_blank"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 hover:underline"
-          >
-            Open Settings <ArrowRight className="w-3 h-3" />
-          </Link>
-        </div>
-
-        {/* All done */}
-        {allDone && (
-          <div className="mt-5 p-5 bg-green-50 dark:bg-green-950/40 border border-green-300 dark:border-green-800 rounded-2xl text-center">
-            <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2" />
-            <p className="font-semibold text-green-900 dark:text-green-200">You&apos;re all set! 🎉</p>
-            <p className="text-xs text-green-700 dark:text-green-400 mt-1 mb-4">
-              Visit any LinkedIn profile and click Connect, Message, or Follow — it saves automatically.
+        {/* ── Step 1: Download ── */}
+        {step === 1 && (
+          <Card>
+            <StepIcon color="blue">
+              {downloaded
+                ? <CheckCircle className="w-7 h-7 text-green-500" />
+                : <Download className="w-7 h-7 text-blue-600 animate-bounce" />
+              }
+            </StepIcon>
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white text-center">
+              {downloaded ? "Downloaded!" : "Downloading…"}
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1">
+              {downloaded
+                ? "Check your Downloads folder for the zip file."
+                : "Saving extension to your Downloads…"
+              }
             </p>
+
+            {downloaded && (
+              <div className="mt-5 flex flex-col items-center gap-3">
+                <ArrowDown className="w-5 h-5 text-blue-400 animate-bounce" />
+                <p className="text-xs text-gray-400">Advancing to next step…</p>
+              </div>
+            )}
+
+            {!downloaded && (
+              <a
+                href="/linkedfollow-extension-v2.zip"
+                download="linkedfollow-extension-v2.zip"
+                className="mt-4 inline-flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-medium"
+              >
+                <Download className="w-3 h-3" /> Download manually
+              </a>
+            )}
+          </Card>
+        )}
+
+        {/* ── Step 2: Unzip & Open Extensions ── */}
+        {step === 2 && (
+          <Card>
+            <StepIcon color="purple">
+              <Chrome className="w-7 h-7 text-purple-600 dark:text-purple-400" />
+            </StepIcon>
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white text-center">
+              Unzip &amp; open Extensions
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1 mb-4">
+              Two quick things before we load it:
+            </p>
+
+            <ol className="space-y-3 mb-5">
+              <SubStep n={1}>
+                <strong>Unzip</strong> the downloaded file — double-click{" "}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-[11px]">linkedfollow-extension-v2.zip</code>
+              </SubStep>
+              <SubStep n={2}>
+                Open <strong>Chrome Extensions</strong> using the button below
+              </SubStep>
+              <SubStep n={3}>
+                Turn on <strong>Developer mode</strong> (top-right toggle)
+                <div className="mt-1.5 flex items-center gap-2">
+                  <div className="w-7 h-3.5 bg-blue-500 rounded-full flex items-center justify-end pr-0.5">
+                    <div className="w-2.5 h-2.5 bg-white rounded-full" />
+                  </div>
+                  <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">ON</span>
+                </div>
+              </SubStep>
+            </ol>
+
+            <a
+              href="/open-extensions.html"
+              target="_blank"
+              rel="noopener"
+              className="w-full inline-flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors mb-2"
+              onClick={next}
+            >
+              <ExternalLink className="w-4 h-4" />
+              Open chrome://extensions
+            </a>
+            <button onClick={next} className="w-full text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 py-1.5">
+              Already open → Next
+            </button>
+          </Card>
+        )}
+
+        {/* ── Step 3: Load unpacked ── */}
+        {step === 3 && (
+          <Card>
+            <StepIcon color="teal">
+              <FolderOpen className="w-7 h-7 text-teal-600 dark:text-teal-400" />
+            </StepIcon>
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white text-center">
+              Load the extension
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1 mb-4">
+              In Chrome&apos;s extension page:
+            </p>
+
+            <ol className="space-y-3 mb-5">
+              <SubStep n={1}>
+                Click <strong>&quot;Load unpacked&quot;</strong>
+              </SubStep>
+              <SubStep n={2}>
+                Navigate to and select the{" "}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-[11px] font-bold text-teal-700 dark:text-teal-300">linkedfollow-extension-v2</code>{" "}
+                folder
+              </SubStep>
+              <SubStep n={3}>
+                You&apos;ll see the <strong>LinkedFollow</strong> card appear — that means it&apos;s installed!
+              </SubStep>
+            </ol>
+
+            <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 mb-5">
+              <Puzzle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>Select the <strong>folder</strong> itself — not a file inside it.</span>
+            </div>
+
+            <button
+              onClick={next}
+              className="w-full inline-flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors"
+            >
+              Done — it&apos;s installed! <ArrowRight className="w-4 h-4" />
+            </button>
+          </Card>
+        )}
+
+        {/* ── Step 4: All set! ── */}
+        {step === 4 && (
+          <Card>
+            <div className="w-14 h-14 bg-green-50 dark:bg-green-950 rounded-full flex items-center justify-center mx-auto mb-2">
+              <CheckCircle className="w-8 h-8 text-green-500" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white text-center">
+              You&apos;re all set!
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1 mb-5">
+              No extra setup needed — the extension auto-connects to your account.
+            </p>
+
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 mb-5 space-y-2.5">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">How it works</p>
+              <HowItWorksItem emoji="🔗" text="Visit any LinkedIn profile" />
+              <HowItWorksItem emoji="💬" text="Send a message — tracked automatically" />
+              <HowItWorksItem emoji="📊" text="See everything in your dashboard" />
+            </div>
+
             <Link
               href="/dashboard"
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors"
+              className="w-full inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-3 rounded-xl text-sm transition-colors"
             >
               Go to Dashboard <ArrowRight className="w-4 h-4" />
             </Link>
-          </div>
+          </Card>
         )}
 
-        {/* Skip */}
-        {!allDone && (
-          <div className="mt-5 text-center">
+        {/* Back + Skip */}
+        <div className="flex items-center justify-between mt-4 px-1">
+          {step > 1 && step < 4 ? (
+            <button onClick={back} className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+          ) : <span />}
+
+          {step < 4 && (
             <Link
               href="/dashboard"
-              className="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
+              className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
             >
-              Skip for now → Go to Dashboard
+              Skip → Dashboard
             </Link>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Small reusable components ──────────────────────────────────────────────── */
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
+      {children}
+    </div>
+  );
+}
+
+function StepIcon({ color, children }: { color: string; children: React.ReactNode }) {
+  const bgMap: Record<string, string> = {
+    blue: "bg-blue-50 dark:bg-blue-950",
+    purple: "bg-purple-50 dark:bg-purple-950",
+    teal: "bg-teal-50 dark:bg-teal-950",
+    green: "bg-green-50 dark:bg-green-950",
+  };
+  return (
+    <div className={`w-14 h-14 ${bgMap[color] || bgMap.blue} rounded-2xl flex items-center justify-center mx-auto mb-3`}>
+      {children}
+    </div>
+  );
+}
+
+function SubStep({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-3">
+      <span className="flex-shrink-0 w-5 h-5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-full text-[10px] font-bold flex items-center justify-center mt-0.5">
+        {n}
+      </span>
+      <span className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">{children}</span>
+    </li>
+  );
+}
+
+function HowItWorksItem({ emoji, text }: { emoji: string; text: string }) {
+  return (
+    <div className="flex items-center gap-2.5 text-sm text-gray-700 dark:text-gray-300">
+      <span className="text-base">{emoji}</span> {text}
     </div>
   );
 }
