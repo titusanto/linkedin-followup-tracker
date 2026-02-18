@@ -138,33 +138,11 @@
     }
 
     let profile_image = null;
-    // 1) Best: hero profile photo (the large one at the top)
-    const heroImg =
-      document.querySelector('.pv-top-card-profile-picture__image--show') ||
-      document.querySelector('.pv-top-card-profile-picture__image') ||
-      document.querySelector('img.profile-photo-edit__preview') ||
-      document.querySelector('.presence-entity__image');
-    if (heroImg?.src && !heroImg.src.startsWith("data:")) {
-      profile_image = heroImg.src;
-    }
-    // 2) Fallback: look for an img whose alt matches the person's name
-    if (!profile_image && name) {
-      for (const img of document.querySelectorAll("img")) {
-        if (img.src && !img.src.startsWith("data:") && img.alt?.trim() === name &&
-            (img.src.includes("licdn.com") || img.src.includes("linkedin.com"))) {
-          profile_image = img.src; break;
-        }
-      }
-    }
-    // 3) Last resort: any licdn profile/shrink image (but skip tiny icons < 48px)
-    if (!profile_image) {
-      for (const img of document.querySelectorAll("img")) {
-        if (img.src && !img.src.startsWith("data:") &&
-            (img.src.includes("licdn.com") || img.src.includes("linkedin.com")) &&
-            (img.src.includes("profile") || img.src.includes("shrink")) &&
-            (img.naturalWidth >= 48 || img.width >= 48)) {
-          profile_image = img.src; break;
-        }
+    for (const img of document.querySelectorAll("img")) {
+      if (img.src && !img.src.startsWith("data:") &&
+          (img.src.includes("licdn.com") || img.src.includes("linkedin.com")) &&
+          (img.src.includes("profile") || img.src.includes("shrink") || img.alt === name)) {
+        profile_image = img.src; break;
       }
     }
 
@@ -235,27 +213,11 @@
         }
       }
 
-      // Profile image — prefer one with matching alt text, skip ghost/placeholder images
-      const cardImgs = container.querySelectorAll("img");
-      // First pass: image whose alt matches the person's name
-      if (name) {
-        for (const img of cardImgs) {
-          if (img.src && !img.src.startsWith("data:") && img.alt?.trim() === name &&
-              (img.src.includes("licdn.com") || img.src.includes("linkedin.com")) &&
-              !img.src.includes("ghost-person") && !img.src.includes("default-avatar")) {
-            profile_image = img.src; break;
-          }
-        }
-      }
-      // Second pass: any licdn image that isn't a placeholder (skip tiny icons)
-      if (!profile_image) {
-        for (const img of cardImgs) {
-          if (img.src && !img.src.startsWith("data:") &&
-              (img.src.includes("licdn.com") || img.src.includes("linkedin.com")) &&
-              !img.src.includes("ghost-person") && !img.src.includes("default-avatar") &&
-              (img.naturalWidth >= 32 || img.width >= 32)) {
-            profile_image = img.src; break;
-          }
+      // Profile image
+      for (const img of container.querySelectorAll("img")) {
+        if (img.src && !img.src.startsWith("data:") &&
+            (img.src.includes("licdn.com") || img.src.includes("linkedin.com"))) {
+          profile_image = img.src; break;
         }
       }
     }
@@ -397,17 +359,17 @@
   }
 
   // ─── Get the open thread participant on /messaging/ page ──────────────────
-  // Returns: { linkedinUrl, name, profile_image, role }
+  // Ordered from most specific (thread header) to least specific (any /in/ link)
   function getMessagingParticipant() {
     const threadSelectors = [
+      // Thread header link — most reliable
       ".msg-thread__link-to-profile",
       ".msg-conversation-topbar__participant-name a",
       ".msg-conversation-topbar a[href*='/in/']",
       ".msg-thread .msg-s-event-listitem__link",
+      // Active thread panel body
       ".msg-s-message-list__event a[href*='/in/']",
     ];
-
-    let linkedinUrl = null, name = null;
 
     for (const sel of threadSelectors) {
       const el = document.querySelector(sel);
@@ -415,59 +377,34 @@
       const href = el.getAttribute("href") || "";
       const m = href.match(/\/in\/([^/?#]+)/);
       if (m) {
-        linkedinUrl = "https://www.linkedin.com/in/" + m[1] + "/";
-        name = el.textContent?.trim() || null;
-        break;
+        return {
+          linkedinUrl: "https://www.linkedin.com/in/" + m[1] + "/",
+          name: el.textContent?.trim() || null,
+        };
       }
     }
 
     // Fallback: thread/conversation panel only (not sidebar)
-    if (!linkedinUrl) {
-      const threadPanel =
-        document.querySelector(".msg-thread")              ||
-        document.querySelector(".msg-s-message-list")      ||
-        document.querySelector('[class*="msg-conversation-"]');
-      if (threadPanel) {
-        const link = threadPanel.querySelector('a[href*="/in/"]');
-        if (link) {
-          const href = link.getAttribute("href") || "";
-          const m = href.match(/\/in\/([^/?#]+)/);
-          if (m) {
-            linkedinUrl = "https://www.linkedin.com/in/" + m[1] + "/";
-            name = link.textContent?.trim() || null;
-          }
+    const threadPanel =
+      document.querySelector(".msg-thread")              ||
+      document.querySelector(".msg-s-message-list")      ||
+      document.querySelector('[class*="msg-conversation-"]');
+
+    if (threadPanel) {
+      const link = threadPanel.querySelector('a[href*="/in/"]');
+      if (link) {
+        const href = link.getAttribute("href") || "";
+        const m = href.match(/\/in\/([^/?#]+)/);
+        if (m) {
+          return {
+            linkedinUrl: "https://www.linkedin.com/in/" + m[1] + "/",
+            name: link.textContent?.trim() || null,
+          };
         }
       }
     }
 
-    // Extract profile image from conversation header
-    let profile_image = null;
-    const topbar =
-      document.querySelector(".msg-conversation-topbar") ||
-      document.querySelector(".msg-thread__topbar") ||
-      document.querySelector('[class*="msg-overlay-conversation-bubble__header"]');
-    if (topbar) {
-      const img = topbar.querySelector('img[src*="licdn.com"], img[src*="linkedin.com"]');
-      if (img?.src && !img.src.startsWith("data:")) profile_image = img.src;
-    }
-    // Fallback: thread presence entity image
-    if (!profile_image) {
-      const presenceImg = document.querySelector('.msg-thread .presence-entity__image, .msg-thread img[src*="licdn.com"]');
-      if (presenceImg?.src && !presenceImg.src.startsWith("data:")) profile_image = presenceImg.src;
-    }
-
-    // Extract role/headline from conversation header subtitle
-    let role = null;
-    const subtitleEl =
-      document.querySelector(".msg-conversation-topbar__participant-headline") ||
-      document.querySelector('[class*="msg-conversation-topbar"] [class*="subtitle"]') ||
-      document.querySelector('[class*="msg-conversation-topbar"] [class*="headline"]');
-    if (subtitleEl) {
-      const t = subtitleEl.textContent?.trim();
-      if (t && t.length > 2 && t.length < 200) role = t;
-    }
-
-    return { linkedinUrl, name, profile_image, role };
+    return { linkedinUrl: null, name: null };
   }
 
   // ─── Main click handler ────────────────────────────────────────────────────
@@ -496,19 +433,16 @@
         }, `💬 Message to ${recipient.name || "contact"} tracked!`), 300);
 
       } else if (isMessagingPage()) {
-        const participant = getMessagingParticipant();
-        if (participant.linkedinUrl) {
-          console.log("[LF] ✓ Message SENT (thread) →", participant.linkedinUrl);
-          showPendingToast(`💬 Tracking message to ${participant.name || "contact"}…`);
-          const payload = {
-            linkedin_url: participant.linkedinUrl,
-            name: participant.name || "Unknown",
+        const { name, linkedinUrl } = getMessagingParticipant();
+        if (linkedinUrl) {
+          console.log("[LF] ✓ Message SENT (thread) →", linkedinUrl);
+          showPendingToast(`💬 Tracking message to ${name || "contact"}…`);
+          setTimeout(() => saveContact({
+            linkedin_url: linkedinUrl,
+            name: name || "Unknown",
             status: "Messaged",
             last_messaged_at: now,
-          };
-          if (participant.profile_image) payload.profile_image = participant.profile_image;
-          if (participant.role) payload.role = participant.role;
-          setTimeout(() => saveContact(payload, `💬 Message to ${participant.name || "contact"} tracked!`), 300);
+          }, `💬 Message to ${name || "contact"} tracked!`), 300);
         } else {
           console.warn("[LF] Send clicked but couldn't identify recipient");
         }
@@ -613,17 +547,14 @@
       const n = container.querySelectorAll(sel).length;
       if (n > lastInboundCount) {
         lastInboundCount = n;
-        const participant = getMessagingParticipant();
-        if (participant.linkedinUrl) {
-          const payload = {
-            linkedin_url: participant.linkedinUrl,
-            name: participant.name || "Unknown",
+        const { name, linkedinUrl } = getMessagingParticipant();
+        if (linkedinUrl) {
+          saveContact({
+            linkedin_url: linkedinUrl,
+            name: name || "Unknown",
             status: "Replied",
             last_replied_at: new Date().toISOString(),
-          };
-          if (participant.profile_image) payload.profile_image = participant.profile_image;
-          if (participant.role) payload.role = participant.role;
-          saveContact(payload, `↩️ Reply from ${participant.name || "contact"} tracked!`);
+          }, `↩️ Reply from ${name || "contact"} tracked!`);
         }
       }
     });
