@@ -163,61 +163,74 @@
     if (inviteMatch) nameFromAria = inviteMatch[1].trim();
     else if (followMatch) nameFromAria = followMatch[1].trim();
 
-    // ── Step 2: Walk up DOM to find a card/li container ───────────────────────
-    let container = buttonEl;
-    for (let i = 0; i < 15; i++) {
-      if (!container || container === document.body) break;
-      const cls = container.className || "";
-      const tag = container.tagName;
-
-      if (
-        cls.includes("entity-result")           ||  // search results
-        cls.includes("discover-entity")         ||  // "People you may know"
-        cls.includes("reusable-search__result") ||
-        cls.includes("mn-connection-card")      ||  // My Network list
-        cls.includes("pymk-hovercard")          ||  // PYMK card
-        cls.includes("feed-shared-actor")       ||  // feed
-        cls.includes("artdeco-card")            ||  // generic card
-        container.getAttribute("data-member-id")           ||
-        container.getAttribute("data-chameleon-result-urn")||
-        tag === "LI"
-      ) break;
-
-      container = container.parentElement;
+    // ── Step 2: Walk up DOM to find the SMALLEST ancestor with a /in/ link ──
+    // LinkedIn uses obfuscated class names, so instead of matching class names
+    // we find the nearest parent that contains a profile link (excluding the
+    // connect/follow button itself). This correctly scopes to the person card.
+    let container = null;
+    let el = buttonEl.parentElement;
+    for (let i = 0; i < 20; i++) {
+      if (!el || el === document.body) break;
+      const profileLinks = el.querySelectorAll('a[href*="/in/"]');
+      // Filter out the connect/follow button itself (it can be an <a> tag)
+      const realLinks = [...profileLinks].filter(a => {
+        const a_aria = (a.getAttribute("aria-label") || "").toLowerCase();
+        return !a_aria.includes("invite") && !a_aria.includes("connect") &&
+               !a_aria.includes("follow");
+      });
+      if (realLinks.length > 0) {
+        // Check this container has only 1 unique profile (the correct person)
+        const uniqueSlugs = new Set(realLinks.map(a => {
+          const m = (a.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
+          return m ? m[1] : null;
+        }).filter(Boolean));
+        if (uniqueSlugs.size === 1) {
+          container = el;
+          break;
+        }
+      }
+      el = el.parentElement;
     }
 
-    // ── Step 3: Find the /in/ profile link inside the container ──────────────
+    // ── Step 3: Extract /in/ URL and profile image from the card ─────────────
     let linkedinUrl = null;
-    let name = nameFromAria; // start with aria name
+    let name = nameFromAria;
     let profile_image = null;
 
-    if (container && container !== document.body) {
-      const profileLink = container.querySelector('a[href*="/in/"]');
+    if (container) {
+      const profileLink = container.querySelector(
+        'a[href*="/in/"]:not([aria-label*="Invite"]):not([aria-label*="connect"]):not([aria-label*="Follow"])'
+      );
       if (profileLink) {
         const href = profileLink.getAttribute("href") || "";
         const m = href.match(/\/in\/([^/?#]+)/);
         if (m) linkedinUrl = "https://www.linkedin.com/in/" + m[1] + "/";
 
-        // Only override name from aria if we didn't get one
         if (!name) {
-          const nameEl =
-            container.querySelector(".entity-result__title-text") ||
-            container.querySelector(".mn-connection-card__name")  ||
-            container.querySelector(".discover-person-card__name")||
-            container.querySelector('[class*="actor-name"]')      ||
-            container.querySelector("h3")                         ||
-            container.querySelector("h2");
-          name = nameEl?.textContent?.trim() || profileLink.textContent?.trim() || null;
+          name = profileLink.textContent?.trim() || null;
           if (name) name = name.replace(/·.*$/, "").trim();
           if (name && name.length > 80) name = null;
         }
       }
 
-      // Profile image
+      // Profile image — prefer profile-displayphoto or profile-framedphoto (≥50px)
       for (const img of container.querySelectorAll("img")) {
-        if (img.src && !img.src.startsWith("data:") &&
-            (img.src.includes("licdn.com") || img.src.includes("linkedin.com"))) {
-          profile_image = img.src; break;
+        if (!img.src || img.src.startsWith("data:")) continue;
+        if (!(img.src.includes("licdn.com") || img.src.includes("linkedin.com"))) continue;
+        const isProfile = img.src.includes("profile-displayphoto") ||
+                          img.src.includes("profile-framedphoto");
+        const size = Math.max(img.width || 0, img.naturalWidth || 0, img.height || 0, img.naturalHeight || 0);
+        if (isProfile && size >= 50) { profile_image = img.src; break; }
+      }
+      // Fallback: any linkedin image ≥ 50px that isn't a background/banner
+      if (!profile_image) {
+        for (const img of container.querySelectorAll("img")) {
+          if (!img.src || img.src.startsWith("data:")) continue;
+          if (!(img.src.includes("licdn.com") || img.src.includes("linkedin.com"))) continue;
+          if (img.src.includes("background") || img.src.includes("banner")) continue;
+          const w = img.width || img.naturalWidth || 0;
+          const h = img.height || img.naturalHeight || 0;
+          if (w >= 50 && h >= 50) { profile_image = img.src; break; }
         }
       }
     }
