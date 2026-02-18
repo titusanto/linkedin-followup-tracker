@@ -13,22 +13,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  async headers() {
-    return [
-      {
-        // Allow Chrome extensions to call our API routes
-        source: "/api/:path*",
-        headers: [
-          { key: "Access-Control-Allow-Origin", value: "*" },
-          { key: "Access-Control-Allow-Methods", value: "GET,POST,OPTIONS" },
-          {
-            key: "Access-Control-Allow-Headers",
-            value: "Content-Type, Extension-Api-Secret, Authorization",
-          },
-        ],
-      },
-    ];
-  },
+  // CORS is handled dynamically per-route in each API handler.
+  // A global wildcard header here would conflict with credentials:"include"
+  // (browsers reject ACAO:* when credentials are sent), so we do NOT set it here.
 };
 
 export default nextConfig;

@@ -1,87 +1,112 @@
 /**
  * LinkedFollow Background Service Worker
  *
- * APP_URL and API_SECRET are hardcoded — never need to be stored or entered by user.
- * Only lf_user_id is stored (per-user UUID from Supabase).
+ * No API secret. No User ID. No storage.
+ * Auth is handled by the Supabase session cookie from the dashboard.
+ * The browser sends it automatically via credentials:"include".
  */
 
-const APP_URL    = "https://linkedin-followup-tracker.vercel.app";
-const API_SECRET = "db1d1b2a1878a78f0dd7f26d0f400866914813d7af98ebff8d5439c0f890ae2e";
+const APP_URL = "https://linkedin-followup-tracker.vercel.app";
+const MAX_LOG = 10; // keep last 10 activity events
+
+// ── Activity log helpers ────────────────────────────────────────────────────
+
+const STATUS_ICON = {
+  Pending:   "⏳",
+  Connected: "🤝",
+  Messaged:  "💬",
+  Replied:   "↩️",
+  Follow:    "➕",
+};
+
+async function logActivity(entry) {
+  try {
+    const result = await chrome.storage.session.get("activityLog");
+    const log = result.activityLog || [];
+    log.unshift(entry); // newest first
+    if (log.length > MAX_LOG) log.length = MAX_LOG;
+    await chrome.storage.session.set({ activityLog: log });
+  } catch (_) {}
+}
+
+// ── Message handler ─────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "SAVE_CONTACT") {
     handleSaveContact(message.payload).then(sendResponse);
     return true; // keep channel open for async response
   }
-
-  if (message.type === "SET_AUTH") {
-    // Only store userId — URL and secret are hardcoded
-    chrome.storage.local.set({ lf_user_id: message.userId });
-    sendResponse({ ok: true });
-    return true;
-  }
-
-  if (message.type === "CLEAR_AUTH") {
-    chrome.storage.local.remove(["lf_api_url", "lf_api_secret", "lf_user_id"]);
-    sendResponse({ ok: true });
+  if (message.type === "GET_ACTIVITY_LOG") {
+    chrome.storage.session.get("activityLog").then((result) => {
+      sendResponse({ log: result.activityLog || [] });
+    });
     return true;
   }
 });
 
-/**
- * Get stored user ID — URL and secret come from hardcoded constants above.
- */
-function getStoredAuth() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["lf_user_id"], (result) => {
-      resolve({
-        apiUrl: APP_URL,
-        apiSecret: API_SECRET,
-        userId: result.lf_user_id || null,
-      });
-    });
-  });
-}
-
-/**
- * Save a contact by calling the Next.js API.
- */
 async function handleSaveContact(payload) {
   try {
-    const auth = await getStoredAuth();
+    console.log("[LF] Saving →", payload.status, payload.name);
 
-    if (!auth.userId) {
-      console.warn("[LinkedFollow] No user ID stored — open the extension popup and connect.");
-      return { success: false, error: "Not connected. Open the LinkedFollow extension and enter your User ID." };
-    }
-
-    const body = {
-      ...payload,
-      user_id: auth.userId,
-    };
-
-    console.log("[LinkedFollow] Saving contact →", auth.apiUrl, "| user:", auth.userId, "| status:", payload.status);
-
-    const response = await fetch(`${auth.apiUrl}/api/contact/save`, {
+    const response = await fetch(`${APP_URL}/api/contact/save`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Extension-Api-Secret": auth.apiSecret,
-      },
-      body: JSON.stringify(body),
+      credentials: "include", // sends the dashboard's Supabase session cookie
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
     const data = await response.json();
 
-    if (!response.ok) {
-      console.error("[LinkedFollow] API error:", data);
-      return { success: false, error: data.error };
+    if (response.status === 401) {
+      // Log failure too so user sees it in popup
+      await logActivity({
+        icon: "⚠️",
+        label: "Not logged in",
+        name: payload.name || "Unknown",
+        status: payload.status,
+        time: Date.now(),
+        ok: false,
+      });
+      return { success: false, error: "not_logged_in" };
     }
 
-    console.log("[LinkedFollow] Saved successfully:", data);
+    if (!response.ok) {
+      console.error("[LF] API error:", data);
+      await logActivity({
+        icon: "✗",
+        label: data.error || "Save failed",
+        name: payload.name || "Unknown",
+        status: payload.status,
+        time: Date.now(),
+        ok: false,
+      });
+      return { success: false, error: data.error || "Save failed" };
+    }
+
+    // ✅ Success — log it
+    const icon = STATUS_ICON[payload.status] || "✓";
+    await logActivity({
+      icon,
+      label: payload.status,
+      name: payload.name || "Unknown",
+      linkedin_url: payload.linkedin_url || null,
+      status: payload.status,
+      time: Date.now(),
+      ok: true,
+    });
+
+    console.log("[LF] Saved ✓", data);
     return { success: true, data };
   } catch (err) {
-    console.error("[LinkedFollow] Network error:", err);
-    return { success: false, error: "Network error: " + err.message };
+    console.error("[LF] Network error:", err);
+    await logActivity({
+      icon: "✗",
+      label: "Network error",
+      name: payload.name || "Unknown",
+      status: payload.status,
+      time: Date.now(),
+      ok: false,
+    });
+    return { success: false, error: "network_error" };
   }
 }

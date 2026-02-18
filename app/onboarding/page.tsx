@@ -21,8 +21,8 @@ export default function OnboardingPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       const a = document.createElement("a");
-      a.href = "/linkedfollow-extension.zip";
-      a.download = "linkedfollow-extension.zip";
+      a.href = "/linkedfollow-extension-v2.zip";
+      a.download = "linkedfollow-extension-v2.zip";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -82,11 +82,11 @@ export default function OnboardingPage() {
               </p>
               <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed" onClick={(e) => e.stopPropagation()}>
                 Unzip it — you&apos;ll get a folder called{" "}
-                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension</code>.
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension-v2</code>.
                 <br />
                 <a
-                  href="/linkedfollow-extension.zip"
-                  download="linkedfollow-extension.zip"
+                  href="/linkedfollow-extension-v2.zip"
+                  download="linkedfollow-extension-v2.zip"
                   className="inline-flex items-center gap-1 mt-1.5 text-blue-600 hover:underline font-medium"
                 >
                   <Download className="w-3 h-3" /> Download again if needed
@@ -154,7 +154,7 @@ export default function OnboardingPage() {
               <p className="font-semibold text-sm text-gray-900 dark:text-white mb-1">Load the extension folder</p>
               <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
                 Click <strong>&ldquo;Load unpacked&rdquo;</strong> and select the{" "}
-                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension</code> folder.
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">linkedfollow-extension-v2</code> folder.
                 <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1.5">
                   <Puzzle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                   <span>Select the <strong>folder</strong> itself — not a file inside it.</span>

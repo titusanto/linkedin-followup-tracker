@@ -3,11 +3,28 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import type { SaveContactPayload, ApiResponse, Contact } from "@/lib/types";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Extension-Api-Secret",
-};
+// Chrome extensions send from a chrome-extension:// origin.
+// credentials:"include" requires a non-wildcard Allow-Origin.
+const ALLOWED_ORIGINS = [
+  "https://linkedin-followup-tracker.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:3001",
+];
+
+function corsHeaders(request: Request) {
+  const origin = request.headers.get("origin") || "";
+  const allowed =
+    origin.startsWith("chrome-extension://") ||
+    ALLOWED_ORIGINS.includes(origin)
+      ? origin
+      : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
 
 // Status ordering — never downgrade to a lower status
 const STATUS_ORDER = [
@@ -20,74 +37,45 @@ function statusRank(s: string): number {
   return idx === -1 ? -1 : idx;
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+export async function OPTIONS(request: Request) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(request) });
 }
 
 /**
  * POST /api/contact/save
  *
- * Upserts a contact for a given user_id + linkedin_url.
- * - Extension sends Extension-Api-Secret + user_id in payload.
- * - Dashboard uses session cookie.
+ * Auth: Supabase session cookie only — no API secret, no User ID needed.
+ * The extension sends credentials:"include" so the browser forwards the
+ * dashboard's session cookie automatically.
  *
- * Key behaviours:
+ * Behaviours:
  * 1. Never downgrades status (Messaged → Pending is ignored).
- * 2. Same LinkedIn account dedup: if a contact with the same linkedin_url
- *    already exists for this user_id, it loads and merges rather than creating
- *    a duplicate.
+ * 2. Same LinkedIn URL dedup per user.
  * 3. Auto-schedules next_followup 2 days after Messaged.
- * 4. Only updates timestamps if the new value is set; never clears existing ones.
+ * 4. Only updates timestamps if provided; never clears existing ones.
  */
 export async function POST(request: Request) {
+  const hdrs = corsHeaders(request);
   try {
-    const secret = request.headers.get("Extension-Api-Secret");
-    const isExtension = !!secret;
+    // Always use session cookie — works for both dashboard and extension
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    if (isExtension && secret !== process.env.EXTENSION_API_SECRET) {
+    if (!user) {
       return NextResponse.json<ApiResponse>(
-        { error: "Unauthorized" },
-        { status: 401, headers: CORS_HEADERS }
+        { error: "not_logged_in" },
+        { status: 401, headers: hdrs }
       );
     }
 
+    const userId = user.id;
     const body = await request.json();
-    const payload = body as SaveContactPayload & { user_id?: string };
-
-    let userId: string | null = null;
-
-    if (isExtension) {
-      userId = payload.user_id ?? null;
-      if (!userId) {
-        return NextResponse.json<ApiResponse>(
-          { error: "user_id is required" },
-          { status: 400, headers: CORS_HEADERS }
-        );
-      }
-    } else {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        return NextResponse.json<ApiResponse>(
-          { error: "Unauthorized" },
-          { status: 401, headers: CORS_HEADERS }
-        );
-      }
-      userId = user.id;
-    }
-
-    // Use admin client for extension (bypasses RLS), server client for dashboard
-    const db = isExtension
-      ? createAdminClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.SUPABASE_SERVICE_ROLE_KEY!
-        )
-      : await createClient();
+    const payload = body as SaveContactPayload;
 
     if (!payload.name || !payload.linkedin_url) {
       return NextResponse.json<ApiResponse>(
         { error: "name and linkedin_url are required" },
-        { status: 400, headers: CORS_HEADERS }
+        { status: 400, headers: hdrs }
       );
     }
 
@@ -95,28 +83,26 @@ export async function POST(request: Request) {
     const incomingStatus = payload.status ?? "Pending";
 
     // ── Check if this LinkedIn URL is already owned by a DIFFERENT user ───────
-    // Use admin client for cross-user check (bypasses RLS)
     const adminDb = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
     const { data: otherUserContact } = await adminDb
       .from("contacts")
-      .select("user_id, name")
+      .select("user_id")
       .eq("linkedin_url", payload.linkedin_url)
       .neq("user_id", userId)
       .maybeSingle();
 
     if (otherUserContact) {
-      // This LinkedIn profile is already tracked by someone else — block it
       return NextResponse.json<ApiResponse>(
         { error: "already_claimed" },
-        { status: 409, headers: CORS_HEADERS }
+        { status: 409, headers: hdrs }
       );
     }
 
-    // ── Fetch existing record (same user + same linkedin_url) ────────────────
-    const { data: existing } = await db
+    // ── Fetch existing record (same user + same linkedin_url) ─────────────────
+    const { data: existing } = await supabase
       .from("contacts")
       .select("*")
       .eq("user_id", userId)
@@ -126,10 +112,8 @@ export async function POST(request: Request) {
     // ── Determine final status (never downgrade) ──────────────────────────────
     let finalStatus = incomingStatus;
     if (existing?.status) {
-      const existingRank = statusRank(existing.status);
-      const incomingRank = statusRank(incomingStatus);
-      if (existingRank > incomingRank) {
-        finalStatus = existing.status; // keep higher status
+      if (statusRank(existing.status) > statusRank(incomingStatus)) {
+        finalStatus = existing.status;
       }
     }
 
@@ -141,12 +125,11 @@ export async function POST(request: Request) {
       autoFollowup = d.toISOString().split("T")[0];
     }
 
-    // ── Build upsert data — only set timestamps if provided, never clear ──────
+    // ── Build upsert — only set timestamps if provided, never clear ───────────
     const upsertData: Record<string, unknown> = {
       user_id: userId,
       name: payload.name,
       linkedin_url: payload.linkedin_url,
-      // Prefer incoming profile data, fall back to existing
       company:       payload.company       ?? existing?.company       ?? null,
       role:          payload.role          ?? existing?.role          ?? null,
       location:      payload.location      ?? existing?.location      ?? null,
@@ -157,33 +140,19 @@ export async function POST(request: Request) {
       updated_at: now,
     };
 
-    // Timestamps: only set if payload provides them; never overwrite with null
-    if (payload.connection_sent_at) {
-      upsertData.connection_sent_at = payload.connection_sent_at;
-    } else if (existing?.connection_sent_at) {
-      upsertData.connection_sent_at = existing.connection_sent_at;
-    }
+    if (payload.connection_sent_at) upsertData.connection_sent_at = payload.connection_sent_at;
+    else if (existing?.connection_sent_at) upsertData.connection_sent_at = existing.connection_sent_at;
 
-    if (payload.last_messaged_at) {
-      upsertData.last_messaged_at = payload.last_messaged_at;
-    } else if (existing?.last_messaged_at) {
-      upsertData.last_messaged_at = existing.last_messaged_at;
-    }
+    if (payload.last_messaged_at) upsertData.last_messaged_at = payload.last_messaged_at;
+    else if (existing?.last_messaged_at) upsertData.last_messaged_at = existing.last_messaged_at;
 
-    if (payload.last_replied_at) {
-      upsertData.last_replied_at = payload.last_replied_at;
-    } else if (existing?.last_replied_at) {
-      upsertData.last_replied_at = existing.last_replied_at;
-    }
+    if (payload.last_replied_at) upsertData.last_replied_at = payload.last_replied_at;
+    else if (existing?.last_replied_at) upsertData.last_replied_at = existing.last_replied_at;
 
-    // Auto followup only if newly needed
-    if (autoFollowup) {
-      upsertData.next_followup = autoFollowup;
-    } else if (existing?.next_followup) {
-      upsertData.next_followup = existing.next_followup;
-    }
+    if (autoFollowup) upsertData.next_followup = autoFollowup;
+    else if (existing?.next_followup) upsertData.next_followup = existing.next_followup;
 
-    const { data, error } = await db
+    const { data, error } = await supabase
       .from("contacts")
       .upsert(upsertData, { onConflict: "user_id,linkedin_url", ignoreDuplicates: false })
       .select()
@@ -193,19 +162,19 @@ export async function POST(request: Request) {
       console.error("contact/save error:", error);
       return NextResponse.json<ApiResponse>(
         { error: error.message },
-        { status: 500, headers: CORS_HEADERS }
+        { status: 500, headers: hdrs }
       );
     }
 
     return NextResponse.json<ApiResponse<Contact>>(
       { data },
-      { status: 200, headers: CORS_HEADERS }
+      { status: 200, headers: hdrs }
     );
   } catch (err) {
     console.error("contact/save unhandled:", err);
     return NextResponse.json<ApiResponse>(
       { error: "Internal server error" },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: hdrs }
     );
   }
 }

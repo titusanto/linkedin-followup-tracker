@@ -2,191 +2,157 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LinkedFollow</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
-      background: #fff;
-      color: #111827;
-      width: 280px;
+      font-size: 13px; background: #fff; color: #111827; width: 280px;
     }
 
+    /* ── Header ── */
     .header {
-      background: #2563eb;
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      background: #2563eb; padding: 12px 16px;
+      display: flex; align-items: center; gap: 8px;
     }
     .logo {
-      width: 26px; height: 26px;
-      background: rgba(255,255,255,0.2);
-      border-radius: 6px;
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 700; font-size: 11px; color: white;
+      width: 26px; height: 26px; background: rgba(255,255,255,0.2);
+      border-radius: 6px; display: flex; align-items: center;
+      justify-content: center; font-weight: 700; font-size: 11px; color: #fff;
     }
-    .header h1 { color: white; font-size: 14px; font-weight: 600; }
+    .header h1 { color: #fff; font-size: 14px; font-weight: 600; flex: 1; }
+    .version { color: rgba(255,255,255,0.6); font-size: 10px; }
 
-    .content { padding: 14px 16px; }
-
-    /* Status bar */
+    /* ── Status bar ── */
+    .content { padding: 12px 14px; }
     .status-bar {
       display: flex; align-items: center; gap: 8px;
-      padding: 9px 12px;
-      background: #f9fafb; border: 1px solid #e5e7eb;
-      border-radius: 8px; margin-bottom: 12px;
+      padding: 8px 11px; background: #f9fafb;
+      border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 10px;
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .dot.on  { background: #10b981; }
-    .dot.off { background: #9ca3af; }
-    .status-text { font-size: 12px; color: #6b7280; }
+    .dot.green { background: #10b981; box-shadow: 0 0 0 3px #d1fae5; }
+    .dot.red   { background: #ef4444; box-shadow: 0 0 0 3px #fee2e2; }
+    .dot.grey  { background: #9ca3af; }
+    .status-text { font-size: 12px; color: #6b7280; line-height: 1.4; }
     .status-text strong { color: #111827; display: block; font-size: 12px; }
 
-    /* Auto-detect notice */
-    #auto-detect-status {
-      display: none;
-      font-size: 11px;
-      color: #6b7280;
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 7px;
-      padding: 8px 10px;
-      margin-bottom: 12px;
-      line-height: 1.4;
+    /* ── Activity Feed ── */
+    .feed-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .feed-label {
+      font-size: 11px; font-weight: 600; color: #6b7280;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .feed-clear {
+      font-size: 10px; color: #9ca3af; cursor: pointer;
+      background: none; border: none; padding: 0;
+    }
+    .feed-clear:hover { color: #ef4444; }
+
+    .feed {
+      border: 1px solid #e5e7eb; border-radius: 8px;
+      overflow: hidden; margin-bottom: 10px; min-height: 48px;
+    }
+    .feed-empty {
+      padding: 14px 12px; text-align: center;
+      color: #9ca3af; font-size: 12px; line-height: 1.5;
+    }
+    .feed-item {
+      display: flex; align-items: flex-start; gap: 9px;
+      padding: 8px 11px; border-bottom: 1px solid #f3f4f6;
+      animation: slideIn 0.2s ease;
+    }
+    .feed-item:last-child { border-bottom: none; }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .feed-item.ok   { background: #fff; }
+    .feed-item.fail { background: #fff9f9; }
+
+    .feed-icon { font-size: 15px; line-height: 1; margin-top: 1px; flex-shrink: 0; }
+    .feed-body { flex: 1; min-width: 0; }
+    .feed-name {
+      font-size: 12px; font-weight: 600; color: #111827;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .feed-status {
+      font-size: 11px; color: #6b7280; margin-top: 1px;
+    }
+    .feed-status.ok-text   { color: #059669; }
+    .feed-status.fail-text { color: #dc2626; }
+    .feed-time {
+      font-size: 10px; color: #d1d5db; flex-shrink: 0; margin-top: 2px;
     }
 
-    /* Single field */
-    label {
-      display: block; font-size: 11px; font-weight: 600;
-      color: #6b7280; margin-bottom: 4px;
-      text-transform: uppercase; letter-spacing: 0.05em;
-    }
-    .field-row { display: flex; gap: 6px; align-items: center; }
-    input {
-      flex: 1; padding: 9px 10px; font-size: 13px;
-      border: 1.5px solid #e5e7eb; border-radius: 7px;
-      background: #fff; color: #111827; outline: none;
-      transition: border-color 0.15s;
-    }
-    input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
-
-    .paste-btn {
-      width: 34px; height: 36px;
-      background: #f3f4f6; border: 1.5px solid #e5e7eb;
-      border-radius: 7px; cursor: pointer; font-size: 15px;
-      display: flex; align-items: center; justify-content: center;
-      transition: background 0.1s; flex-shrink: 0;
-    }
-    .paste-btn:hover { background: #e5e7eb; }
-    .paste-btn.ok { background: #d1fae5; border-color: #6ee7b7; }
-
-    /* Buttons */
+    /* ── Buttons ── */
     .btn {
-      width: 100%; padding: 10px; font-size: 13px; font-weight: 600;
+      width: 100%; padding: 9px; font-size: 12px; font-weight: 600;
       border: none; border-radius: 8px; cursor: pointer;
-      transition: background 0.15s; margin-top: 10px;
+      transition: background 0.15s; margin-top: 4px;
     }
-    .btn-blue  { background: #2563eb; color: #fff; }
+    .btn-blue { background: #2563eb; color: #fff; }
     .btn-blue:hover { background: #1d4ed8; }
     .btn-blue:disabled { background: #93c5fd; cursor: not-allowed; }
-    .btn-ghost { background: #f3f4f6; color: #374151; }
-    .btn-ghost:hover { background: #e5e7eb; }
-    .btn-red   { background: #fee2e2; color: #dc2626; }
-    .btn-red:hover { background: #fecaca; }
-
-    /* Dashboard link */
     .dash-link {
       display: flex; align-items: center; justify-content: center; gap: 5px;
-      width: 100%; padding: 9px; font-size: 13px; font-weight: 500;
+      width: 100%; padding: 8px; font-size: 12px; font-weight: 500;
       color: #2563eb; background: #eff6ff; border: 1px solid #bfdbfe;
-      border-radius: 8px; text-decoration: none; margin-top: 8px;
-      transition: background 0.15s;
+      border-radius: 8px; text-decoration: none; margin-top: 6px;
     }
     .dash-link:hover { background: #dbeafe; }
-
-    /* Messages */
-    .msg {
-      font-size: 12px; padding: 8px 10px; border-radius: 7px;
-      margin-top: 8px; display: none;
+    .capture-msg {
+      font-size: 11px; padding: 6px 10px; border-radius: 6px;
+      margin-top: 6px; display: none; text-align: center;
     }
-    .msg.success { background: #d1fae5; color: #065f46; display: block; }
-    .msg.error   { background: #fee2e2; color: #991b1b; display: block; }
-
-    /* Help */
-    .hint {
-      font-size: 11px; color: #9ca3af; text-align: center;
-      margin-top: 10px; line-height: 1.5;
-    }
-    .hint a { color: #2563eb; text-decoration: none; }
-    .hint a:hover { text-decoration: underline; }
-
-    /* Views */
-    #logged-in-view, #login-view { display: none; }
+    .capture-msg.success { background: #d1fae5; color: #065f46; display: block; }
+    .capture-msg.error   { background: #fee2e2; color: #991b1b; display: block; }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="logo">LF</div>
     <h1>LinkedFollow</h1>
+    <span class="version">v2.1</span>
   </div>
 
   <div class="content">
 
-    <!-- ── Logged-in view ── -->
-    <div id="logged-in-view">
-      <div class="status-bar">
-        <div class="dot on"></div>
-        <div class="status-text">
-          <strong id="uid-display">Connected ✓</strong>
-          Auto-saving LinkedIn contacts
-        </div>
+    <!-- Status -->
+    <div class="status-bar">
+      <div class="dot grey" id="status-dot"></div>
+      <div class="status-text">
+        <strong id="status-title">Checking…</strong>
+        <span id="status-sub"></span>
       </div>
-
-      <button class="btn btn-blue" id="capture-btn">💾 Save This Profile Now</button>
-      <div id="capture-msg" class="msg"></div>
-
-      <a id="dashboard-link" class="dash-link" href="#" target="_blank">↗ Open Dashboard</a>
-      <button class="btn btn-red" id="logout-btn">Sign out</button>
     </div>
 
-    <!-- ── Login view ── -->
-    <div id="login-view">
-      <div class="status-bar">
-        <div class="dot off"></div>
-        <div class="status-text">
-          <strong>Not connected</strong>
-          Searching for your account…
-        </div>
-      </div>
-
-      <!-- Auto-detect status shown here -->
-      <div id="auto-detect-status"></div>
-
-      <label>Your User ID</label>
-      <div class="field-row">
-        <input
-          type="text"
-          id="user-id"
-          placeholder="Paste from Dashboard → Settings"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <button class="paste-btn" id="paste-uid" title="Paste from clipboard">📋</button>
-      </div>
-
-      <button class="btn btn-blue" id="login-btn">Connect</button>
-      <div id="msg" class="msg"></div>
-
-      <p class="hint">
-        Or open <a href="https://linkedin-followup-tracker.vercel.app/dashboard/settings" target="_blank">Dashboard → Settings</a> and copy your User ID
-      </p>
+    <!-- Live Activity Feed -->
+    <div class="feed-header">
+      <span class="feed-label">Recent Activity</span>
+      <button class="feed-clear" id="clear-btn">Clear</button>
     </div>
+    <div class="feed" id="feed">
+      <div class="feed-empty" id="feed-empty">
+        No activity yet.<br>
+        Go connect, message or follow someone on LinkedIn!
+      </div>
+    </div>
+
+    <!-- Manual save -->
+    <button class="btn btn-blue" id="capture-btn" disabled>💾 Save This Profile Now</button>
+    <div id="capture-msg" class="capture-msg"></div>
+
+    <!-- Dashboard link -->
+    <a class="dash-link" href="https://linkedin-followup-tracker.vercel.app/dashboard" target="_blank">
+      ↗ Open Dashboard
+    </a>
 
   </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

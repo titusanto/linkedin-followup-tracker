@@ -1,15 +1,13 @@
 {
   "manifest_version": 3,
   "name": "LinkedFollow – LinkedIn Follow-up Tracker",
-  "version": "1.2.0",
-  "description": "Automatically save LinkedIn contacts to your follow-up dashboard when you connect, message, or follow.",
+  "version": "2.1.0",
+  "description": "Automatically track LinkedIn connects, messages and replies in your dashboard.",
 
   "permissions": [
-    "storage",
     "activeTab",
     "tabs",
-    "clipboardRead",
-    "scripting"
+    "storage"
   ],
 
   "host_permissions": [
