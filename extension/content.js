@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.3
+ * LinkedFollow Content Script v2.4
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -582,18 +582,23 @@
   let replyObserver    = null;
   let lastInboundCount = 0;
 
-  // Count inbound messages: LinkedIn no longer uses --inbound classes.
-  // Inbound messages are list items WITHOUT a sender profile link/button
-  // (outbound messages show YOUR name+profile link as the sender).
+  // Count inbound messages: LinkedIn shows sender profile links on ALL messages
+  // (both yours and theirs). To distinguish, we compare each message's sender
+  // URL against the thread header's profile URL (which is the OTHER person).
+  // Messages whose sender URL matches the header = inbound (reply from them).
   function countInboundMessages(container) {
+    // Get the other person's profile URL from the thread header
+    const headerLink = document.querySelector(".msg-thread__link-to-profile");
+    const otherPersonUrl = headerLink?.getAttribute("href") || "";
+    if (!otherPersonUrl) return 0; // can't determine without header
+
     const items = container.querySelectorAll(":scope > li.msg-s-message-list__event");
     let count = 0;
     for (const li of items) {
-      const hasSender = li.querySelector(
-        ".msg-s-message-group__profile-link, .msg-s-message-group__name, " +
-        'a[href*="/in/"], button[class*="profile-link"]'
-      );
-      if (!hasSender) count++; // no sender shown = inbound
+      const senderLink = li.querySelector('a[href*="/in/"]');
+      if (!senderLink) continue; // skip date separators / system items
+      const senderUrl = senderLink.getAttribute("href") || "";
+      if (senderUrl === otherPersonUrl) count++; // sender is the other person = inbound
     }
     return count;
   }
@@ -912,5 +917,5 @@
   if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
   if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.3 loaded on", location.pathname);
+  console.log("[LF] v2.4 loaded on", location.pathname);
 })();
