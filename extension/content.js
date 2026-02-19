@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.1
+ * LinkedFollow Content Script v2.2
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -254,9 +254,8 @@
 
     // ── 1. Send button (check FIRST — most specific) ──────────────────────────
     //
-    // Case A: InMail / paid messaging — class "msg-form__send-btn"
-    //   <button class="msg-form__send-btn artdeco-button...">
-    if (cls.includes("msg-form__send-btn")) return "send";
+    // Case A: InMail / messaging — class "msg-form__send-btn" or "msg-form__send-button"
+    if (cls.includes("msg-form__send-btn") || cls.includes("msg-form__send-button")) return "send";
 
     // Case B: Free message after connecting — class "message-send", aria "Send Message"
     //   <button class="message-send" aria-label="Send Message">
@@ -317,6 +316,27 @@
     return null;
   }
 
+  // ─── Helper: extract recipient from a compose bubble element ────────────────
+  function extractRecipientFromBubble(bubble) {
+    if (!bubble) return null;
+    const titleLink = bubble.querySelector(
+      '.msg-overlay-conversation-bubble__convo-title a[href*="/in/"], ' +
+      'a.msg-thread__link-to-profile, ' +
+      'a[href*="/in/"]'
+    );
+    if (titleLink) {
+      const href = titleLink.getAttribute("href") || "";
+      const m = href.match(/\/in\/([^/?#]+)/);
+      if (m) {
+        return {
+          linkedin_url: "https://www.linkedin.com/in/" + m[1] + "/",
+          name: cleanMsgName(titleLink.textContent),
+        };
+      }
+    }
+    return null;
+  }
+
   // ─── Get message recipient from compose overlay or send-btn context ─────────
   function getComposeRecipient(contextEl) {
     // Walk up to find an overlay bubble (mini chat window bottom-right)
@@ -324,29 +344,13 @@
       contextEl?.closest?.(".msg-overlay-conversation-bubble") ||
       contextEl?.closest?.(".msg-overlay-list-bubble");
 
-    if (bubble) {
-      const titleLink = bubble.querySelector(
-        '.msg-overlay-conversation-bubble__convo-title a[href*="/in/"], ' +
-        'a.msg-thread__link-to-profile, ' +
-        'a[href*="/in/"]'
-      );
-      if (titleLink) {
-        const href = titleLink.getAttribute("href") || "";
-        const m = href.match(/\/in\/([^/?#]+)/);
-        if (m) {
-          return {
-            linkedin_url: "https://www.linkedin.com/in/" + m[1] + "/",
-            name: titleLink.textContent?.trim() || null,
-          };
-        }
-      }
-    }
+    const fromBubble = extractRecipientFromBubble(bubble);
+    if (fromBubble) return fromBubble;
 
     // For .send-btn-container (free message after connecting) —
     // the thread context is the surrounding conversation container
     const sendBtnContainer = contextEl?.closest?.(".send-btn-container");
     if (sendBtnContainer) {
-      // Walk up to find the conversation wrapper, then look for /in/ link
       const convoWrapper =
         sendBtnContainer.closest('[class*="conversation"]') ||
         sendBtnContainer.closest('[class*="thread"]')       ||
@@ -360,30 +364,41 @@
           if (m) {
             return {
               linkedin_url: "https://www.linkedin.com/in/" + m[1] + "/",
-              name: link.textContent?.trim() || null,
+              name: cleanMsgName(link.textContent),
             };
           }
         }
       }
     }
 
-    // For msg-form__send-btn (InMail / paid) — we're on /messaging/ page
+    // Fallback: get from messaging thread (main DOM or shadow DOM)
     return getMessagingParticipant();
+  }
+
+  // ─── Clean name from messaging elements (strip status/mobile text) ────────
+  function cleanMsgName(rawText) {
+    if (!rawText) return null;
+    // The link element contains child text like "Status is reachable", "Mobile • 4h ago"
+    // The actual name is always the first line/text node
+    let name = rawText.split("\n")[0].trim();
+    if (!name) name = rawText.replace(/\s+/g, " ").trim().split("  ")[0].trim();
+    if (name && name.length > 80) return null;
+    return name || null;
   }
 
   // ─── Get the open thread participant on /messaging/ page ──────────────────
   // Ordered from most specific (thread header) to least specific (any /in/ link)
+  // Searches both main DOM and shadow DOM (LinkedIn messaging overlay)
   function getMessagingParticipant() {
     const threadSelectors = [
-      // Thread header link — most reliable
       ".msg-thread__link-to-profile",
       ".msg-conversation-topbar__participant-name a",
       ".msg-conversation-topbar a[href*='/in/']",
       ".msg-thread .msg-s-event-listitem__link",
-      // Active thread panel body
       ".msg-s-message-list__event a[href*='/in/']",
     ];
 
+    // Search in main DOM first
     for (const sel of threadSelectors) {
       const el = document.querySelector(sel);
       if (!el) continue;
@@ -392,7 +407,7 @@
       if (m) {
         return {
           linkedinUrl: "https://www.linkedin.com/in/" + m[1] + "/",
-          name: el.textContent?.trim() || null,
+          name: cleanMsgName(el.textContent),
         };
       }
     }
@@ -411,7 +426,24 @@
         if (m) {
           return {
             linkedinUrl: "https://www.linkedin.com/in/" + m[1] + "/",
-            name: link.textContent?.trim() || null,
+            name: cleanMsgName(link.textContent),
+          };
+        }
+      }
+    }
+
+    // Search shadow DOM (LinkedIn overlay messaging uses shadow root)
+    const shadowRoot = document.querySelector(".theme--light")?.shadowRoot;
+    if (shadowRoot) {
+      for (const sel of threadSelectors) {
+        const el = shadowRoot.querySelector(sel);
+        if (!el) continue;
+        const href = el.getAttribute("href") || "";
+        const m = href.match(/\/in\/([^/?#]+)/);
+        if (m) {
+          return {
+            linkedinUrl: "https://www.linkedin.com/in/" + m[1] + "/",
+            name: cleanMsgName(el.textContent),
           };
         }
       }
@@ -733,6 +765,74 @@
     }
   }
 
+  // ─── Shadow DOM click handler for messaging overlay ────────────────────────
+  // LinkedIn renders the messaging overlay (InMail compose, mini chat bubbles)
+  // inside a shadow root at div.theme--light. Clicks inside the shadow DOM
+  // don't propagate to document-level listeners, so we attach a separate one.
+  let shadowClickAttached = false;
+  function attachShadowClickListener() {
+    if (shadowClickAttached) return;
+    const shadowHost = document.querySelector(".theme--light");
+    const sr = shadowHost?.shadowRoot;
+    if (!sr) return;
+    shadowClickAttached = true;
+
+    sr.addEventListener("click", (e) => {
+      const found = findActionButton(e.target);
+      if (!found) return;
+
+      const { el, kind } = found;
+      const now = new Date().toISOString();
+
+      if (kind === "send") {
+        // Try to find recipient from the overlay bubble in shadow DOM
+        const bubble = el.closest?.(".msg-overlay-conversation-bubble");
+        let recipient = extractRecipientFromBubble(bubble);
+
+        // Fallback: search shadow DOM thread selectors
+        if (!recipient?.linkedin_url) {
+          const participant = getMessagingParticipant();
+          if (participant?.linkedinUrl) {
+            recipient = { linkedin_url: participant.linkedinUrl, name: participant.name };
+          }
+        }
+
+        if (recipient?.linkedin_url) {
+          console.log("[LF] ✓ Message SENT (shadow overlay) →", recipient.linkedin_url);
+          showPendingToast(`💬 Tracking message to ${recipient.name || "contact"}…`);
+          setTimeout(() => saveContact({
+            linkedin_url: recipient.linkedin_url,
+            name: recipient.name || "Unknown",
+            status: "Messaged",
+            last_messaged_at: now,
+          }, `💬 Message to ${recipient.name || "contact"} tracked!`), 300);
+        } else {
+          console.warn("[LF] Shadow send clicked but couldn't identify recipient");
+        }
+        return;
+      }
+
+      if (kind === "send-message") {
+        console.log("[LF] Shadow message button clicked — waiting for actual Send…");
+        return;
+      }
+    }, true);
+
+    console.log("[LF] Shadow DOM click listener attached");
+  }
+
+  // Poll for shadow root since it may not exist immediately
+  function waitForShadowRoot() {
+    if (shadowClickAttached) return;
+    const shadowHost = document.querySelector(".theme--light");
+    if (shadowHost?.shadowRoot) {
+      attachShadowClickListener();
+    } else {
+      setTimeout(waitForShadowRoot, 1500);
+    }
+  }
+  setTimeout(waitForShadowRoot, 1000);
+
   // ─── SPA navigation watcher ────────────────────────────────────────────────
   let lastPath = location.pathname;
   setInterval(() => {
@@ -769,5 +869,5 @@
   if (isProfilePage())                             setTimeout(checkProfileForAcceptance, 2500);
   if (location.pathname.startsWith("/mynetwork"))  setTimeout(scanMyNetworkPage,         2000);
 
-  console.log("[LF] v2.1 loaded on", location.pathname);
+  console.log("[LF] v2.2 loaded on", location.pathname);
 })();
