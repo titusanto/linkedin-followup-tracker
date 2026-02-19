@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedFollow – LinkedIn Follow-up Tracker",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "Automatically track LinkedIn connects, messages and replies in your dashboard.",
 
   "permissions": [

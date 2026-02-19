@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.2
+ * LinkedFollow Content Script v2.3
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -498,21 +498,23 @@
     // ── Connect / Follow ───────────────────────────────────────────────────
     if (kind === "connect" || kind === "follow") {
       let prof;
-      if (onProfile) {
+      // Always try extractFromCard first — works for search, network, feed,
+      // AND the "similar profiles" section at the bottom of profile pages.
+      // Only fall back to extractProfile() if we're on a profile page and
+      // extractFromCard didn't find a card (meaning it's the main Connect btn).
+      prof = extractFromCard(el);
+      if (!prof && onProfile) {
         prof = extractProfile();
-      } else {
-        // Off-profile: search results, My Network, feed etc.
-        prof = extractFromCard(el);
-        if (!prof) {
-          // Last resort: parse name from aria-label "Invite Jane Doe to connect"
-          const aria = el.getAttribute("aria-label") || "";
-          const nameMatch = aria.match(/^Invite (.+?) to connect/i);
-          if (nameMatch) {
-            prof = { name: nameMatch[1].trim(), linkedin_url: null, profile_image: null };
-          } else {
-            console.warn("[LF] Could not identify person for", kind, "click");
-            return;
-          }
+      }
+      if (!prof) {
+        // Last resort: parse name from aria-label "Invite Jane Doe to connect"
+        const aria = el.getAttribute("aria-label") || "";
+        const nameMatch = aria.match(/^Invite (.+?) to connect/i);
+        if (nameMatch) {
+          prof = { name: nameMatch[1].trim(), linkedin_url: null, profile_image: null };
+        } else {
+          console.warn("[LF] Could not identify person for", kind, "click");
+          return;
         }
       }
 
@@ -580,16 +582,31 @@
   let replyObserver    = null;
   let lastInboundCount = 0;
 
+  // Count inbound messages: LinkedIn no longer uses --inbound classes.
+  // Inbound messages are list items WITHOUT a sender profile link/button
+  // (outbound messages show YOUR name+profile link as the sender).
+  function countInboundMessages(container) {
+    const items = container.querySelectorAll(":scope > li.msg-s-message-list__event");
+    let count = 0;
+    for (const li of items) {
+      const hasSender = li.querySelector(
+        ".msg-s-message-group__profile-link, .msg-s-message-group__name, " +
+        'a[href*="/in/"], button[class*="profile-link"]'
+      );
+      if (!hasSender) count++; // no sender shown = inbound
+    }
+    return count;
+  }
+
   function watchForReplies() {
     const container = document.querySelector(".msg-s-message-list-content");
     if (!container) { setTimeout(watchForReplies, 1200); return; }
 
-    const sel = '.msg-s-message-group--inbound, [class*="message-group--inbound"]';
-    lastInboundCount = container.querySelectorAll(sel).length;
+    lastInboundCount = countInboundMessages(container);
 
     replyObserver?.disconnect();
     replyObserver = new MutationObserver(() => {
-      const n = container.querySelectorAll(sel).length;
+      const n = countInboundMessages(container);
       if (n > lastInboundCount) {
         lastInboundCount = n;
         const { name, linkedinUrl } = getMessagingParticipant();
@@ -604,7 +621,7 @@
       }
     });
     replyObserver.observe(container, { childList: true, subtree: true });
-    console.log("[LF] Watching for replies");
+    console.log("[LF] Watching for replies (inbound:", lastInboundCount, ")");
   }
 
   if (isMessagingPage()) setTimeout(watchForReplies, 1500);
@@ -637,15 +654,17 @@
     return "https://www.linkedin.com/in/" + m[1] + "/";
   }
 
+  // Check if a profile page shows "connected" state by scanning ALL buttons/links
+  // on the page (not relying on old container class names that LinkedIn removed).
   function isNowConnected() {
-    const buttons = document.querySelectorAll(
-      '.pvs-profile-actions button, .pvs-profile-actions a, ' +
-      '.pv-top-card-v2-ctas button, .pv-top-card-v2-ctas a'
-    );
+    const allBtns = document.querySelectorAll("button, a");
     let hasMessage = false, hasConnect = false, hasPending = false;
-    for (const btn of buttons) {
+    for (const btn of allBtns) {
       const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
       const text = btn.textContent.replace(/\s+/g, " ").trim().toLowerCase();
+      // Only check buttons near the top of the page (skip similar profiles at bottom)
+      const rect = btn.getBoundingClientRect();
+      if (rect.top > 600) continue; // skip anything far down the page
       if (aria.match(/\bmessage\b/) || text === "message") hasMessage = true;
       if (aria.match(/\bconnect\b/) || aria.includes("invite") || text === "connect") hasConnect = true;
       if (aria.includes("pending") || text === "pending") hasPending = true;
@@ -655,11 +674,8 @@
 
   function watchProfileForAcceptance(profileUrl) {
     acceptanceObserver?.disconnect();
-    const actionArea =
-      document.querySelector(".pvs-profile-actions") ||
-      document.querySelector(".pv-top-card-v2-ctas") ||
-      document.querySelector(".ph5.pb5");
-    if (!actionArea) return;
+    // Observe the entire main content area since LinkedIn uses obfuscated classes
+    const actionArea = document.querySelector("main") || document.body;
 
     let fired = false;
     acceptanceObserver = new MutationObserver(() => {
@@ -697,31 +713,59 @@
     watchProfileForAcceptance(profileUrl);
   }
 
-  // Notification bell watcher
-  let notifObserver = null;
-  function watchNotificationsDropdown() {
-    notifObserver?.disconnect();
-    const dropdown =
-      document.querySelector(".notifications-nav-item__dropdown") ||
-      document.querySelector('[aria-label="Notifications"] + *') ||
-      document.querySelector('.notification-badge__count')?.closest("li")?.querySelector("ul");
-    if (!dropdown) return;
+  // ─── Periodic acceptance polling ──────────────────────────────────────────
+  // Poll the API every 5 minutes to check if any pending contacts were accepted.
+  // This catches acceptances that happen while the user is on any LinkedIn page
+  // (not just the specific profile page or notifications).
+  let lastPollTime = 0;
+  async function pollForAcceptances() {
+    if (pendingContacts.length === 0) return;
+    const now = Date.now();
+    if (now - lastPollTime < 300000) return; // max once per 5 min
+    lastPollTime = now;
 
-    notifObserver = new MutationObserver(() => {
-      const items = dropdown.querySelectorAll('.nt-card__text, .notification-item, [class*="notification"]');
-      for (const item of items) {
-        const text = item.textContent || "";
-        if (!text.toLowerCase().includes("accepted your invitation")) continue;
-        const link = item.querySelector('a[href*="/in/"]') ||
-          item.closest("li")?.querySelector('a[href*="/in/"]');
-        if (!link) continue;
+    try {
+      const res = await fetch(`${APP_URL}/api/contacts?status=Pending`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const currentPending = (data.data || []).map(c => c.linkedin_url);
+      // Any contact that was in our local pendingContacts but is no longer Pending
+      // in the API has been accepted (or status changed externally)
+      for (const pc of pendingContacts) {
+        if (!currentPending.includes(pc.linkedin_url)) {
+          console.log("[LF] ✓ Acceptance detected (poll):", pc.name);
+          pendingContacts = pendingContacts.filter(c => c.linkedin_url !== pc.linkedin_url);
+        }
+      }
+      // Refresh our local list
+      pendingContacts = (data.data || []).map(c => ({
+        linkedin_url: c.linkedin_url,
+        name: c.name,
+      }));
+    } catch (_) {}
+  }
+
+  // Notification page watcher — scan /notifications/ page for acceptance text
+  function scanNotificationsPage() {
+    if (!window.location.pathname.startsWith("/notifications")) return;
+    setTimeout(async () => {
+      if (pendingContacts.length === 0) await loadPendingContacts();
+      if (pendingContacts.length === 0) return;
+
+      const allLinks = document.querySelectorAll('a[href*="/in/"]');
+      for (const link of allLinks) {
+        const container = link.closest("li") || link.closest("div") || link.parentElement;
+        const text = container?.textContent?.toLowerCase() || "";
+        if (!text.includes("accepted")) continue;
         const href = link.getAttribute("href") || "";
         const m = href.match(/\/in\/([^/?#]+)/);
         if (!m) continue;
         const profileUrl = "https://www.linkedin.com/in/" + m[1] + "/";
         const pending = pendingContacts.find(c => c.linkedin_url === profileUrl);
         if (!pending) continue;
-        console.log("[LF] ✓ Acceptance via notification:", profileUrl);
+        console.log("[LF] ✓ Acceptance via notifications page:", profileUrl);
         saveContact({
           linkedin_url: profileUrl,
           name: pending.name,
@@ -729,14 +773,8 @@
         }, `🤝 ${pending.name} accepted your request!`);
         pendingContacts = pendingContacts.filter(c => c.linkedin_url !== profileUrl);
       }
-    });
-    notifObserver.observe(dropdown, { childList: true, subtree: true });
+    }, 2000);
   }
-
-  document.addEventListener("click", (e) => {
-    const el = e.target?.closest?.('[data-control-name="nav.notifications"], [href*="/notifications/"], .notification-badge');
-    if (el) setTimeout(watchNotificationsDropdown, 800);
-  }, true);
 
   // My Network page scan
   async function scanMyNetworkPage() {
@@ -836,15 +874,19 @@
   // ─── SPA navigation watcher ────────────────────────────────────────────────
   let lastPath = location.pathname;
   setInterval(() => {
-    if (location.pathname === lastPath) return;
-    lastPath = location.pathname;
+    if (location.pathname !== lastPath) {
+      lastPath = location.pathname;
 
-    replyObserver?.disconnect();    replyObserver    = null; lastInboundCount = 0;
-    acceptanceObserver?.disconnect(); acceptanceObserver = null;
+      replyObserver?.disconnect();    replyObserver    = null; lastInboundCount = 0;
+      acceptanceObserver?.disconnect(); acceptanceObserver = null;
 
-    if (isMessagingPage())                              setTimeout(watchForReplies,          1500);
-    if (isProfilePage())                               setTimeout(checkProfileForAcceptance, 1500);
-    if (location.pathname.startsWith("/mynetwork"))    setTimeout(scanMyNetworkPage,         1000);
+      if (isMessagingPage())                              setTimeout(watchForReplies,          1500);
+      if (isProfilePage())                               setTimeout(checkProfileForAcceptance, 1500);
+      if (location.pathname.startsWith("/mynetwork"))    setTimeout(scanMyNetworkPage,         1000);
+      if (location.pathname.startsWith("/notifications")) scanNotificationsPage();
+    }
+    // Periodic acceptance poll on any page
+    pollForAcceptances();
   }, 500);
 
   // ─── Manual capture from popup ────────────────────────────────────────────
@@ -865,9 +907,10 @@
 
   // ─── Init ──────────────────────────────────────────────────────────────────
   setTimeout(loadPendingContacts, 2000);
-  if (isMessagingPage())                           setTimeout(watchForReplies,          1500);
-  if (isProfilePage())                             setTimeout(checkProfileForAcceptance, 2500);
-  if (location.pathname.startsWith("/mynetwork"))  setTimeout(scanMyNetworkPage,         2000);
+  if (isMessagingPage())                              setTimeout(watchForReplies,          1500);
+  if (isProfilePage())                                setTimeout(checkProfileForAcceptance, 2500);
+  if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
+  if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.2 loaded on", location.pathname);
+  console.log("[LF] v2.3 loaded on", location.pathname);
 })();
