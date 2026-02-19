@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.4
+ * LinkedFollow Content Script v2.5
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -578,31 +578,58 @@
     setTimeout(() => saveContact(prof, `⏳ Request sent to ${prof.name}!`), 600);
   }, true);
 
-  // ─── Reply detection (MutationObserver on thread) ─────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ─── REPLY DETECTION ───────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Strategy 1: REAL-TIME — MutationObserver on the open thread (catches live replies)
+  // Strategy 2: SIDEBAR SCANNER — periodically scans the messaging sidebar for
+  //   conversations where the last message was NOT sent by "You:" — this means
+  //   the other person replied. Cross-references against our API contacts with
+  //   status "Messaged" to detect replies that happened while the user was away.
+  // Strategy 3: ON-OPEN — when a thread is opened, immediately check if the
+  //   latest message is from the other person (reply already arrived).
+
   let replyObserver    = null;
   let lastInboundCount = 0;
+  let messagedContacts = [];           // contacts with status "Messaged" from API
+  let lastReplyPollTime = 0;
+  let detectedReplies  = new Set();    // linkedin_urls we already detected as replied
 
-  // Count inbound messages: LinkedIn shows sender profile links on ALL messages
-  // (both yours and theirs). To distinguish, we compare each message's sender
-  // URL against the thread header's profile URL (which is the OTHER person).
-  // Messages whose sender URL matches the header = inbound (reply from them).
+  // ── Load contacts with status "Messaged" from the dashboard API ───────────
+  async function loadMessagedContacts() {
+    try {
+      const res = await fetch(`${APP_URL}/api/contacts?status=Messaged`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      messagedContacts = (data.data || []).map(c => ({
+        linkedin_url: c.linkedin_url,
+        name: c.name,
+      }));
+      console.log("[LF] Loaded", messagedContacts.length, "messaged contacts for reply detection");
+    } catch (_) {}
+  }
+
+  // ── Count inbound messages in the currently open thread ───────────────────
   function countInboundMessages(container) {
-    // Get the other person's profile URL from the thread header
     const headerLink = document.querySelector(".msg-thread__link-to-profile");
     const otherPersonUrl = headerLink?.getAttribute("href") || "";
-    if (!otherPersonUrl) return 0; // can't determine without header
+    if (!otherPersonUrl) return 0;
 
     const items = container.querySelectorAll(":scope > li.msg-s-message-list__event");
     let count = 0;
     for (const li of items) {
       const senderLink = li.querySelector('a[href*="/in/"]');
-      if (!senderLink) continue; // skip date separators / system items
+      if (!senderLink) continue;
       const senderUrl = senderLink.getAttribute("href") || "";
-      if (senderUrl === otherPersonUrl) count++; // sender is the other person = inbound
+      if (senderUrl === otherPersonUrl) count++;
     }
     return count;
   }
 
+  // ── Strategy 1: Real-time MutationObserver on open thread ─────────────────
   function watchForReplies() {
     const container = document.querySelector(".msg-s-message-list-content");
     if (!container) { setTimeout(watchForReplies, 1200); return; }
@@ -614,8 +641,13 @@
       const n = countInboundMessages(container);
       if (n > lastInboundCount) {
         lastInboundCount = n;
-        const { name, linkedinUrl } = getMessagingParticipant();
+        const headerLink = document.querySelector(".msg-thread__link-to-profile");
+        const href = headerLink?.getAttribute("href") || "";
+        const m = href.match(/\/in\/([^/?#]+)/);
+        const linkedinUrl = m ? "https://www.linkedin.com/in/" + m[1] + "/" : null;
+        const name = cleanMsgName(headerLink?.textContent);
         if (linkedinUrl) {
+          detectedReplies.add(linkedinUrl);
           saveContact({
             linkedin_url: linkedinUrl,
             name: name || "Unknown",
@@ -629,7 +661,134 @@
     console.log("[LF] Watching for replies (inbound:", lastInboundCount, ")");
   }
 
-  if (isMessagingPage()) setTimeout(watchForReplies, 1500);
+  // ── Strategy 3: On-open thread check — detect reply that already arrived ──
+  function checkOpenThreadForReply() {
+    const container = document.querySelector(".msg-s-message-list-content");
+    if (!container) return;
+
+    const headerLink = document.querySelector(".msg-thread__link-to-profile");
+    const href = headerLink?.getAttribute("href") || "";
+    const m = href.match(/\/in\/([^/?#]+)/);
+    if (!m) return;
+    const linkedinUrl = "https://www.linkedin.com/in/" + m[1] + "/";
+
+    // Skip if already detected or not in our messaged list
+    if (detectedReplies.has(linkedinUrl)) return;
+    const isMessaged = messagedContacts.some(c => c.linkedin_url === linkedinUrl);
+    if (!isMessaged) return;
+
+    // Check if the latest message in the thread is from the other person
+    const events = [...container.querySelectorAll(":scope > li.msg-s-message-list__event")];
+    const lastEvent = events[events.length - 1];
+    if (!lastEvent) return;
+
+    const lastSenderLink = lastEvent.querySelector('a[href*="/in/"]');
+    if (!lastSenderLink) return;
+    const lastSenderUrl = lastSenderLink.getAttribute("href") || "";
+
+    if (lastSenderUrl === href) {
+      // Last message is from the other person — they replied!
+      const name = cleanMsgName(headerLink?.textContent);
+      detectedReplies.add(linkedinUrl);
+      console.log("[LF] ✓ Reply detected (on-open):", name, linkedinUrl);
+      saveContact({
+        linkedin_url: linkedinUrl,
+        name: name || "Unknown",
+        status: "Replied",
+        last_replied_at: new Date().toISOString(),
+      }, `↩️ Reply from ${name || "contact"} tracked!`);
+      // Remove from messaged list so we don't re-detect
+      messagedContacts = messagedContacts.filter(c => c.linkedin_url !== linkedinUrl);
+    }
+  }
+
+  // ── Strategy 2: Sidebar Scanner — scan ALL conversations in sidebar ───────
+  // The sidebar shows a snippet for each conversation:
+  //   "You: Hey" = you sent the last message (no reply yet)
+  //   "Arockiya: How are you?" = they replied (first name prefix, not "You:")
+  // Cross-reference against our "Messaged" contacts to detect replies.
+  async function scanMessagingSidebar() {
+    if (!isMessagingPage()) return;
+    if (messagedContacts.length === 0) await loadMessagedContacts();
+    if (messagedContacts.length === 0) return;
+
+    const convos = document.querySelectorAll(".msg-conversation-listitem");
+    if (convos.length === 0) return;
+
+    for (const convo of convos) {
+      const nameEl = convo.querySelector('[class*="participant-names"]');
+      const snippetEl = convo.querySelector('[class*="message-snippet"], [class*="snippet"]');
+      if (!nameEl || !snippetEl) continue;
+
+      const fullName = nameEl.textContent.trim();
+      const snippet  = snippetEl.textContent.trim();
+
+      // Skip if YOU sent the last message or it's a sponsored message
+      if (snippet.startsWith("You:")) continue;
+      if (snippet.toLowerCase().includes("sponsored")) continue;
+
+      // The snippet starts with the other person's first name + ":"
+      // e.g., "Arockiya: How are you?" or "Dhoulath: Hello"
+      const firstName = fullName.split(" ")[0];
+      if (!snippet.startsWith(firstName + ":")) continue;
+
+      // Match against our "Messaged" contacts by name
+      const matchedContact = messagedContacts.find(c => {
+        if (!c.name) return false;
+        // Try exact match first
+        if (c.name === fullName) return true;
+        // Try partial match (first + last name)
+        const cFirst = c.name.split(" ")[0];
+        if (cFirst === firstName && fullName.includes(c.name.split(" ").pop())) return true;
+        // Try starts-with match (name in sidebar might be truncated)
+        if (c.name.startsWith(firstName) && fullName.startsWith(firstName)) {
+          // Compare more carefully — at least first name + first char of last name
+          const cParts = c.name.split(" ");
+          const fParts = fullName.split(" ");
+          if (cParts.length >= 2 && fParts.length >= 2 &&
+              cParts[0] === fParts[0] && cParts[1][0] === fParts[1][0]) return true;
+        }
+        return false;
+      });
+
+      if (!matchedContact) continue;
+      if (detectedReplies.has(matchedContact.linkedin_url)) continue;
+
+      // We have a match! This person replied.
+      detectedReplies.add(matchedContact.linkedin_url);
+      console.log("[LF] ✓ Reply detected (sidebar scan):", fullName, matchedContact.linkedin_url);
+      saveContact({
+        linkedin_url: matchedContact.linkedin_url,
+        name: fullName || matchedContact.name,
+        status: "Replied",
+        last_replied_at: new Date().toISOString(),
+      }, `↩️ Reply from ${fullName || "contact"} tracked!`);
+      // Remove from messaged list so we don't re-detect
+      messagedContacts = messagedContacts.filter(c => c.linkedin_url !== matchedContact.linkedin_url);
+    }
+  }
+
+  // ── Periodic reply polling — runs on any LinkedIn page ────────────────────
+  // Throttled to once per 2 minutes. On messaging pages, also scans sidebar.
+  async function pollForReplies() {
+    const now = Date.now();
+    if (now - lastReplyPollTime < 120000) return; // max once per 2 min
+    lastReplyPollTime = now;
+
+    if (isMessagingPage()) {
+      await scanMessagingSidebar();
+    }
+  }
+
+  // ── Init reply detection ──────────────────────────────────────────────────
+  if (isMessagingPage()) {
+    setTimeout(watchForReplies, 1500);
+    setTimeout(async () => {
+      await loadMessagedContacts();
+      checkOpenThreadForReply();
+      scanMessagingSidebar();
+    }, 3000);
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ─── CONNECTION ACCEPTANCE DETECTION ──────────────────────────────────────
@@ -878,20 +1037,44 @@
 
   // ─── SPA navigation watcher ────────────────────────────────────────────────
   let lastPath = location.pathname;
+  let lastThreadId = null; // track thread changes within /messaging/
   setInterval(() => {
-    if (location.pathname !== lastPath) {
-      lastPath = location.pathname;
+    const currentPath = location.pathname;
+    const pathChanged = currentPath !== lastPath;
+
+    if (pathChanged) {
+      lastPath = currentPath;
 
       replyObserver?.disconnect();    replyObserver    = null; lastInboundCount = 0;
       acceptanceObserver?.disconnect(); acceptanceObserver = null;
 
-      if (isMessagingPage())                              setTimeout(watchForReplies,          1500);
+      if (isMessagingPage()) {
+        setTimeout(watchForReplies, 1500);
+        setTimeout(() => { checkOpenThreadForReply(); scanMessagingSidebar(); }, 3000);
+      }
       if (isProfilePage())                               setTimeout(checkProfileForAcceptance, 1500);
-      if (location.pathname.startsWith("/mynetwork"))    setTimeout(scanMyNetworkPage,         1000);
-      if (location.pathname.startsWith("/notifications")) scanNotificationsPage();
+      if (currentPath.startsWith("/mynetwork"))          setTimeout(scanMyNetworkPage,         1000);
+      if (currentPath.startsWith("/notifications"))      scanNotificationsPage();
     }
-    // Periodic acceptance poll on any page
+
+    // Detect thread switches within messaging (URL changes from one thread to another)
+    if (isMessagingPage()) {
+      const threadMatch = currentPath.match(/\/messaging\/thread\/([^/]+)/);
+      const currentThread = threadMatch ? threadMatch[1] : null;
+      if (currentThread && currentThread !== lastThreadId) {
+        lastThreadId = currentThread;
+        if (!pathChanged) {
+          // Thread changed within messaging page (SPA navigation)
+          replyObserver?.disconnect(); replyObserver = null; lastInboundCount = 0;
+          setTimeout(watchForReplies, 1500);
+          setTimeout(checkOpenThreadForReply, 2500);
+        }
+      }
+    }
+
+    // Periodic polls on any page
     pollForAcceptances();
+    pollForReplies();
   }, 500);
 
   // ─── Manual capture from popup ────────────────────────────────────────────
@@ -912,10 +1095,10 @@
 
   // ─── Init ──────────────────────────────────────────────────────────────────
   setTimeout(loadPendingContacts, 2000);
-  if (isMessagingPage())                              setTimeout(watchForReplies,          1500);
+  // Reply detection init is handled above (watchForReplies + loadMessagedContacts + sidebar scan)
   if (isProfilePage())                                setTimeout(checkProfileForAcceptance, 2500);
   if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
   if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.4 loaded on", location.pathname);
+  console.log("[LF] v2.5 loaded on", location.pathname);
 })();
