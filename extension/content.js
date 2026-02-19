@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.5
+ * LinkedFollow Content Script v2.6
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -379,11 +379,13 @@
   function cleanMsgName(rawText) {
     if (!rawText) return null;
     // The link element contains child text like "Status is reachable", "Mobile • 4h ago"
-    // The actual name is always the first line/text node
-    let name = rawText.split("\n")[0].trim();
-    if (!name) name = rawText.replace(/\s+/g, " ").trim().split("  ")[0].trim();
-    if (name && name.length > 80) return null;
-    return name || null;
+    // The actual name is always the first NON-EMPTY line
+    // (rawText often starts with \n, so split("\n")[0] is empty — must skip empties)
+    let name = rawText.split("\n").map(l => l.trim()).find(l => l.length > 0) || "";
+    // Strip trailing status text patterns: "Status is online", "Active now", "Mobile • 4h"
+    name = name.replace(/\s*(Status is .+|Active now|Mobile\s*[•·].*)$/i, "").trim();
+    if (!name || name.length > 80) return null;
+    return name;
   }
 
   // ─── Get the open thread participant on /messaging/ page ──────────────────
@@ -597,14 +599,14 @@
   let detectedReplies  = new Set();    // linkedin_urls we already detected as replied
 
   // ── Load contacts with status "Messaged" from the dashboard API ───────────
+  // Routes through background.js to avoid CORS blocking on linkedin.com
   async function loadMessagedContacts() {
     try {
-      const res = await fetch(`${APP_URL}/api/contacts?status=Messaged`, {
-        credentials: "include",
+      const res = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: "FETCH_CONTACTS", status: "Messaged" }, resolve);
       });
-      if (!res.ok) return;
-      const data = await res.json();
-      messagedContacts = (data.data || []).map(c => ({
+      if (!res?.success) return;
+      messagedContacts = (res.data || []).map(c => ({
         linkedin_url: c.linkedin_url,
         name: c.name,
       }));
@@ -797,14 +799,14 @@
   let pendingContacts    = [];
   let acceptanceObserver = null;
 
+  // Routes through background.js to avoid CORS blocking on linkedin.com
   async function loadPendingContacts() {
     try {
-      const res = await fetch(`${APP_URL}/api/contacts?status=Pending`, {
-        credentials: "include",
+      const res = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: "FETCH_CONTACTS", status: "Pending" }, resolve);
       });
-      if (!res.ok) return;
-      const data = await res.json();
-      pendingContacts = (data.data || []).map(c => ({
+      if (!res?.success) return;
+      pendingContacts = (res.data || []).map(c => ({
         linkedin_url: c.linkedin_url,
         name: c.name,
       }));
@@ -889,12 +891,11 @@
     lastPollTime = now;
 
     try {
-      const res = await fetch(`${APP_URL}/api/contacts?status=Pending`, {
-        credentials: "include",
+      const res = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: "FETCH_CONTACTS", status: "Pending" }, resolve);
       });
-      if (!res.ok) return;
-      const data = await res.json();
-      const currentPending = (data.data || []).map(c => c.linkedin_url);
+      if (!res?.success) return;
+      const currentPending = (res.data || []).map(c => c.linkedin_url);
       // Any contact that was in our local pendingContacts but is no longer Pending
       // in the API has been accepted (or status changed externally)
       for (const pc of pendingContacts) {
@@ -904,7 +905,7 @@
         }
       }
       // Refresh our local list
-      pendingContacts = (data.data || []).map(c => ({
+      pendingContacts = (res.data || []).map(c => ({
         linkedin_url: c.linkedin_url,
         name: c.name,
       }));
@@ -1052,7 +1053,10 @@
         setTimeout(watchForReplies, 1500);
         setTimeout(() => { checkOpenThreadForReply(); scanMessagingSidebar(); }, 3000);
       }
-      if (isProfilePage())                               setTimeout(checkProfileForAcceptance, 1500);
+      if (isProfilePage()) {
+        setTimeout(checkProfileForAcceptance, 1500);
+        setTimeout(enrichProfileIfTracked, 3500);
+      }
       if (currentPath.startsWith("/mynetwork"))          setTimeout(scanMyNetworkPage,         1000);
       if (currentPath.startsWith("/notifications"))      scanNotificationsPage();
     }
@@ -1093,12 +1097,43 @@
     }
   });
 
+  // ─── Profile Enrichment ────────────────────────────────────────────────────
+  // When visiting a profile page, if the contact is already tracked but missing
+  // role/company, re-extract profile data and push an update.
+  async function enrichProfileIfTracked() {
+    if (!isProfilePage()) return;
+    const profileUrl = currentProfileUrl();
+    if (!profileUrl) return;
+
+    // Wait for page to fully load profile data
+    await new Promise(r => setTimeout(r, 2000));
+
+    const prof = extractProfile();
+    if (!prof.role && !prof.company) return; // nothing to enrich with
+
+    // Only send enrichment — don't set status (let API keep existing status)
+    // saveContact won't downgrade status since the API handles status ordering
+    console.log("[LF] Enriching profile:", prof.name, "role:", prof.role, "company:", prof.company);
+    saveContact({
+      linkedin_url: profileUrl,
+      name: prof.name || "Unknown",
+      status: "Pending",           // lowest rank — API will keep existing higher status
+      role: prof.role,
+      company: prof.company,
+      location: prof.location,
+      profile_image: prof.profile_image,
+    });
+  }
+
   // ─── Init ──────────────────────────────────────────────────────────────────
   setTimeout(loadPendingContacts, 2000);
   // Reply detection init is handled above (watchForReplies + loadMessagedContacts + sidebar scan)
-  if (isProfilePage())                                setTimeout(checkProfileForAcceptance, 2500);
+  if (isProfilePage()) {
+    setTimeout(checkProfileForAcceptance, 2500);
+    setTimeout(enrichProfileIfTracked, 4000);
+  }
   if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
   if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.5 loaded on", location.pathname);
+  console.log("[LF] v2.6 loaded on", location.pathname);
 })();

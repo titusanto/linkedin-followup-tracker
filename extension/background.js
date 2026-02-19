@@ -36,6 +36,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     handleSaveContact(message.payload).then(sendResponse);
     return true; // keep channel open for async response
   }
+  if (message.type === "FETCH_CONTACTS") {
+    handleFetchContacts(message.status).then(sendResponse);
+    return true;
+  }
   if (message.type === "GET_ACTIVITY_LOG") {
     chrome.storage.session.get("activityLog").then((result) => {
       sendResponse({ log: result.activityLog || [] });
@@ -43,6 +47,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
+
+// ── Fetch contacts (proxy for content script — avoids CORS) ─────────────
+async function handleFetchContacts(status) {
+  try {
+    let url = `${APP_URL}/api/contacts`;
+    if (status) url += `?status=${encodeURIComponent(status)}`;
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) return { success: false, data: [] };
+    const json = await response.json();
+    return { success: true, data: json.data || [] };
+  } catch (_) {
+    return { success: false, data: [] };
+  }
+}
 
 async function handleSaveContact(payload) {
   try {
