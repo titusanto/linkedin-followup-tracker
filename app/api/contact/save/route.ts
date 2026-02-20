@@ -102,12 +102,34 @@ export async function POST(request: Request) {
     }
 
     // ── Fetch existing record (same user + same linkedin_url) ─────────────────
-    const { data: existing } = await supabase
+    // LinkedIn uses two URL formats: encoded IDs (/in/ACoAA...) and readable
+    // slugs (/in/john-doe-123/). The messaging page captures encoded IDs while
+    // visiting the profile page captures readable slugs. Both may refer to the
+    // same person, so we also try a name-based fallback to prevent duplicates.
+    let existing: Contact | null = null;
+    const { data: byUrl } = await supabase
       .from("contacts")
       .select("*")
       .eq("user_id", userId)
       .eq("linkedin_url", payload.linkedin_url)
       .maybeSingle();
+    existing = byUrl ?? null;
+
+    // Fallback: find by name if URL didn't match (handles encoded ↔ slug mismatch)
+    if (!existing && payload.name) {
+      const cleanName = payload.name.split(" ").slice(0, 2).join(" "); // first + last
+      const { data: byName } = await supabase
+        .from("contacts")
+        .select("*")
+        .eq("user_id", userId)
+        .ilike("name", `${cleanName}%`)
+        .maybeSingle();
+      if (byName) {
+        existing = byName;
+        // Keep the existing URL (the one already in the DB) for the upsert
+        payload.linkedin_url = byName.linkedin_url;
+      }
+    }
 
     // ── Determine final status (never downgrade) ──────────────────────────────
     let finalStatus = incomingStatus;

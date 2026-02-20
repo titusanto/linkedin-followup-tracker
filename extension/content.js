@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.6
+ * LinkedFollow Content Script v2.7
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -86,14 +86,36 @@
   }
 
   // ─── Extract profile data from a /in/ page ────────────────────────────────
+  // LinkedIn 2025+: no h1, no ld+json, obfuscated class names.
+  // Strategy: find name heading (h1 or h2), then extract role/location/company
+  // by scanning visible text elements positioned below the name heading.
   function extractProfile() {
     const url = "https://www.linkedin.com" +
       window.location.pathname.replace(/\/?$/, "/");
 
+    // ── Name: try h1, then h2, then document.title ──
     let name = document.querySelector("h1")?.textContent?.trim() || null;
-    if (!name) name = document.title.split("|")[0].trim() || null;
+    if (!name) {
+      // LinkedIn 2025+ uses h2 for profile name
+      const titleName = document.title.split("|")[0].trim().replace(/\s*\(.*\)$/, "");
+      for (const h2 of document.querySelectorAll("h2")) {
+        const t = h2.innerText?.trim();
+        if (t && t.length > 1 && t.length < 60) {
+          const rect = h2.getBoundingClientRect();
+          // The profile name h2 is large (20px+) and in the main content area
+          const fs = parseFloat(getComputedStyle(h2).fontSize);
+          if (fs >= 18 && rect.left < 400 && rect.width > 50) {
+            name = t;
+            break;
+          }
+        }
+      }
+      if (!name) name = titleName || null;
+    }
 
     let role = null, company = null;
+
+    // ── Strategy 1: ld+json (still works on some profiles) ──
     try {
       for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
         const j = JSON.parse(s.textContent || "{}");
@@ -109,6 +131,7 @@
       }
     } catch (_) {}
 
+    // ── Strategy 2: Old class selectors (pre-2025 LinkedIn) ──
     if (!role) {
       const candidates = document.querySelectorAll(
         '.text-body-medium.break-words, [class*="pv-text-details"] [class*="text-body-medium"]'
@@ -123,11 +146,88 @@
       }
     }
 
+    // ── Strategy 3: Position-based extraction (2025+ obfuscated classes) ──
+    // Find the name heading element, then scan visible elements below it
+    if (!role) {
+      const nameHeading = document.querySelector("h1") ||
+        [...document.querySelectorAll("h2")].find(h => {
+          const fs = parseFloat(getComputedStyle(h).fontSize);
+          const rect = h.getBoundingClientRect();
+          return fs >= 18 && rect.left < 400 && rect.width > 50 && rect.top > 100;
+        });
+
+      if (nameHeading) {
+        const nameRect = nameHeading.getBoundingClientRect();
+        const nearbyTexts = [];
+
+        // Scan all small text elements positioned below the name
+        for (const el of document.querySelectorAll("p, div, span")) {
+          if (el.children.length > 2) continue;
+          const t = el.innerText?.trim();
+          if (!t || t.length < 3 || t.length > 150) continue;
+
+          const rect = el.getBoundingClientRect();
+          const fs = parseFloat(getComputedStyle(el).fontSize);
+
+          // Must be below name, in the left portion, reasonable font size
+          if (rect.top > nameRect.bottom - 5 && rect.top < nameRect.bottom + 80 &&
+              rect.left < 500 && fs >= 12 && rect.height > 8 && rect.height < 50) {
+            // Skip noise: pronouns, degree indicators, nav items
+            if (t.match(/^(She\/Her|He\/Him|They\/Them|· \d|Follow|Connect|Message|More|Pending)/i)) continue;
+            if (el.closest("nav") || el.closest("button")) continue;
+
+            nearbyTexts.push({ text: t, top: rect.top, fontSize: fs, left: rect.left });
+          }
+        }
+
+        nearbyTexts.sort((a, b) => a.top - b.top || a.left - b.left);
+
+        // The first sizable text below the name is typically the role/headline
+        for (const item of nearbyTexts) {
+          if (item.text.length > 3 && item.fontSize >= 14 &&
+              !item.text.match(/connection|follower|Contact info|^\d|^·/i)) {
+            role = item.text;
+            break;
+          }
+        }
+      }
+    }
+
     if (!company && role?.includes(" at ")) {
       company = role.split(" at ").pop().split("|")[0].trim();
     }
 
+    // ── Strategy for company: look for text to the right of the name heading ──
+    // LinkedIn 2025+ shows company with an icon to the right of the name line
+    if (!company) {
+      const nameHeading = document.querySelector("h1") ||
+        [...document.querySelectorAll("h2")].find(h => {
+          const fs = parseFloat(getComputedStyle(h).fontSize);
+          return fs >= 18 && h.getBoundingClientRect().left < 400;
+        });
+      if (nameHeading) {
+        const nameRect = nameHeading.getBoundingClientRect();
+        for (const el of document.querySelectorAll("p, span, a")) {
+          if (el.children.length > 1) continue;
+          const t = el.innerText?.trim();
+          if (!t || t.length < 2 || t.length > 80) continue;
+          const rect = el.getBoundingClientRect();
+          const fs = parseFloat(getComputedStyle(el).fontSize);
+          // Company is typically at the same vertical level as the name but to the right
+          if (Math.abs(rect.top - nameRect.top) < 20 && rect.left > nameRect.right + 30 &&
+              fs >= 12 && fs <= 16 &&
+              !t.match(/^(She\/Her|He\/Him|They\/Them|· \d|1st|2nd|3rd)/i) &&
+              !el.closest("nav") && !el.closest("button")) {
+            company = t;
+            break;
+          }
+        }
+      }
+    }
+
+    // ── Location ──
     let location = null;
+    // Strategy 1: Old class selectors
     for (const el of document.querySelectorAll('[class*="text-body-small"]')) {
       const t = el.textContent.trim();
       if (t.length > 2 && t.length < 80 &&
@@ -136,7 +236,34 @@
         location = t; break;
       }
     }
+    // Strategy 2: Position-based (below role, contains comma = likely a location)
+    if (!location) {
+      const nameHeading = document.querySelector("h1") ||
+        [...document.querySelectorAll("h2")].find(h => {
+          const fs = parseFloat(getComputedStyle(h).fontSize);
+          return fs >= 18 && h.getBoundingClientRect().left < 400;
+        });
+      if (nameHeading) {
+        const nameRect = nameHeading.getBoundingClientRect();
+        for (const el of document.querySelectorAll("p, span")) {
+          if (el.children.length > 1) continue;
+          const t = el.innerText?.trim();
+          if (!t || t.length < 5 || t.length > 80) continue;
+          const rect = el.getBoundingClientRect();
+          const fs = parseFloat(getComputedStyle(el).fontSize);
+          // Location is usually 50-90px below name, 14px font, contains comma
+          if (rect.top > nameRect.bottom + 30 && rect.top < nameRect.bottom + 100 &&
+              rect.left < 400 && fs >= 12 && fs <= 16 &&
+              t.includes(",") &&
+              !t.match(/connection|follower|Contact|http|www\./i)) {
+            location = t;
+            break;
+          }
+        }
+      }
+    }
 
+    // ── Profile image ──
     let profile_image = null;
     for (const img of document.querySelectorAll("img")) {
       if (img.src && !img.src.startsWith("data:") &&
@@ -381,9 +508,20 @@
     // The link element contains child text like "Status is reachable", "Mobile • 4h ago"
     // The actual name is always the first NON-EMPTY line
     // (rawText often starts with \n, so split("\n")[0] is empty — must skip empties)
-    let name = rawText.split("\n").map(l => l.trim()).find(l => l.length > 0) || "";
-    // Strip trailing status text patterns: "Status is online", "Active now", "Mobile • 4h"
-    name = name.replace(/\s*(Status is .+|Active now|Mobile\s*[•·].*)$/i, "").trim();
+    const lines = rawText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    let name = lines[0] || "";
+    // Strip trailing status text that LinkedIn sometimes appends on the same line
+    name = name
+      .replace(/\s*(Status is .+|Active now|Mobile\s*[•·].*|Last active .+|Reachable via .+)$/i, "")
+      .replace(/\s*(She\/Her|He\/Him|They\/Them|Non-binary)\s*$/i, "")
+      .trim();
+    // If the first line itself was a status line, find the real name
+    if (!name || name.match(/^(Status is|Active now|Mobile|Last active|Reachable)/i)) {
+      name = lines.find(l =>
+        l.length > 1 && l.length < 60 &&
+        !l.match(/^(Status is|Active now|Mobile|Last active|Reachable|She\/Her|He\/Him|They\/Them)/i)
+      ) || "";
+    }
     if (!name || name.length > 80) return null;
     return name;
   }
@@ -735,20 +873,27 @@
       if (!snippet.startsWith(firstName + ":")) continue;
 
       // Match against our "Messaged" contacts by name
+      // DB names may have dirty suffixes (e.g. "Dhoulath J Status is reachable Mobile • 10h ago")
+      // so we need flexible matching.
       const matchedContact = messagedContacts.find(c => {
         if (!c.name) return false;
-        // Try exact match first
-        if (c.name === fullName) return true;
-        // Try partial match (first + last name)
-        const cFirst = c.name.split(" ")[0];
-        if (cFirst === firstName && fullName.includes(c.name.split(" ").pop())) return true;
-        // Try starts-with match (name in sidebar might be truncated)
-        if (c.name.startsWith(firstName) && fullName.startsWith(firstName)) {
-          // Compare more carefully — at least first name + first char of last name
-          const cParts = c.name.split(" ");
+        // Clean the DB name by stripping known status suffixes
+        const cleanDbName = c.name
+          .replace(/\s*(Status is .+|Active now|Mobile\s*[•·].*|Last active .+|Reachable via .+)$/i, "")
+          .replace(/\s*(She\/Her|He\/Him|They\/Them)\s*$/i, "")
+          .trim();
+        // Try exact match (clean or raw)
+        if (c.name === fullName || cleanDbName === fullName) return true;
+        // Try first-name match (most reliable for dirty names)
+        const cFirst = cleanDbName.split(" ")[0];
+        if (cFirst === firstName) {
+          // First names match — verify with at least first char of second word
+          const cParts = cleanDbName.split(" ");
           const fParts = fullName.split(" ");
           if (cParts.length >= 2 && fParts.length >= 2 &&
-              cParts[0] === fParts[0] && cParts[1][0] === fParts[1][0]) return true;
+              cParts[1][0] === fParts[1][0]) return true;
+          // If only one word in either, first-name alone is enough
+          if (cParts.length === 1 || fParts.length === 1) return true;
         }
         return false;
       });
@@ -1135,5 +1280,5 @@
   if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
   if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.6 loaded on", location.pathname);
+  console.log("[LF] v2.7 loaded on", location.pathname);
 })();
