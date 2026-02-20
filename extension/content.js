@@ -87,14 +87,14 @@
 
   // ─── Voyager API enrichment ────────────────────────────────────────────────
   // LinkedIn's internal API returns headline, location, profile image, and
-  // publicIdentifier (readable slug) for any encoded profile ID (ACoAAXXX).
-  // This lets us enrich contacts from the messaging page without visiting
-  // their profile page.
-  const _voyagerCache = {};  // encodedId → { headline, location, publicIdentifier, profileImageUrl }
+  // publicIdentifier (readable slug) for any profile identifier — either an
+  // encoded ID (ACoAAXXX) or a readable slug (john-doe-123).
+  // This lets us enrich contacts from any page without visiting their profile.
+  const _voyagerCache = {};  // identifier → { headline, location, publicIdentifier, profileImageUrl }
 
-  async function fetchVoyagerProfile(encodedId) {
-    if (!encodedId || !encodedId.startsWith("ACo")) return null;
-    if (_voyagerCache[encodedId]) return _voyagerCache[encodedId];
+  async function fetchVoyagerProfile(identifier) {
+    if (!identifier || identifier.length < 2) return null;
+    if (_voyagerCache[identifier]) return _voyagerCache[identifier];
 
     try {
       const csrfCookie = document.cookie.split(";").map(c => c.trim())
@@ -103,7 +103,7 @@
       if (!csrfToken) return null;
 
       const url = "/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity="
-        + encodedId
+        + identifier
         + "&decorationId=com.linkedin.voyager.dash.deco.identity.profile.WebTopCardCore-18";
 
       const res = await fetch(url, {
@@ -145,7 +145,7 @@
         profileImageUrl,
       };
 
-      _voyagerCache[encodedId] = result;
+      _voyagerCache[identifier] = result;
       console.log("[LF] Voyager enrichment:", result.firstName, result.lastName,
         "→", result.headline?.substring(0, 50), "| loc:", result.location);
       return result;
@@ -155,10 +155,11 @@
     }
   }
 
-  // Helper: extract the encoded profile ID from a /in/ACoAAXXX URL
-  function extractEncodedId(url) {
+  // Helper: extract the profile identifier from a /in/ URL
+  // Returns encoded ID (ACoAAXXX) or readable slug (john-doe-123)
+  function extractProfileId(url) {
     if (!url) return null;
-    const m = url.match(/\/in\/(ACo[A-Za-z0-9_-]+)/);
+    const m = url.match(/\/in\/([^/?#]+)/);
     return m ? m[1] : null;
   }
 
@@ -747,8 +748,8 @@
 
       // Enrich via Voyager API (async, non-blocking) then save
       setTimeout(async () => {
-        const encodedId = extractEncodedId(recipientUrl);
-        const voyager = await fetchVoyagerProfile(encodedId);
+        const profileId = extractProfileId(recipientUrl);
+        const voyager = await fetchVoyagerProfile(profileId);
         const enrichment = buildEnrichmentPayload(voyager);
 
         // Use readable slug URL if available from Voyager
@@ -927,8 +928,8 @@
         if (linkedinUrl) {
           detectedReplies.add(linkedinUrl);
           // Enrich via Voyager API
-          const encodedId = extractEncodedId(href);
-          const voyager = await fetchVoyagerProfile(encodedId);
+          const profileId = extractProfileId(href);
+          const voyager = await fetchVoyagerProfile(profileId);
           const enrichment = buildEnrichmentPayload(voyager);
           let finalUrl = linkedinUrl;
           if (voyager?.publicIdentifier) {
@@ -984,8 +985,8 @@
       console.log("[LF] ✓ Reply detected (on-open):", name, linkedinUrl);
 
       // Enrich via Voyager API
-      const encodedId = extractEncodedId(href);
-      const voyager = await fetchVoyagerProfile(encodedId);
+      const profileId = extractProfileId(href);
+      const voyager = await fetchVoyagerProfile(profileId);
       const enrichment = buildEnrichmentPayload(voyager);
       let finalUrl = linkedinUrl;
       if (voyager?.publicIdentifier) {
@@ -1079,8 +1080,8 @@
       }
 
       // Enrich via Voyager API (use encoded ID from matched contact URL)
-      const encodedId = extractEncodedId(matchedContact.linkedin_url);
-      const voyager = await fetchVoyagerProfile(encodedId);
+      const profileId = extractProfileId(matchedContact.linkedin_url);
+      const voyager = await fetchVoyagerProfile(profileId);
       const enrichment = buildEnrichmentPayload(voyager);
       let finalUrl = matchedContact.linkedin_url;
       if (voyager?.publicIdentifier) {
@@ -1337,8 +1338,8 @@
           console.log("[LF] ✓ Message SENT (shadow overlay) →", recipient.linkedin_url);
           showPendingToast(`💬 Tracking message to ${recipient.name || "contact"}…`);
           setTimeout(async () => {
-            const encodedId = extractEncodedId(recipient.linkedin_url);
-            const voyager = await fetchVoyagerProfile(encodedId);
+            const profileId = extractProfileId(recipient.linkedin_url);
+            const voyager = await fetchVoyagerProfile(profileId);
             const enrichment = buildEnrichmentPayload(voyager);
             let finalUrl = recipient.linkedin_url;
             if (voyager?.publicIdentifier) {
@@ -1528,13 +1529,13 @@
         sidebarImg = img.src;
       }
 
-      // Get the encoded profile ID — try from the matched contact's URL, or try opening the thread
-      const encodedId = extractEncodedId(matched.linkedin_url);
-      if (!encodedId && !sidebarImg) continue; // nothing we can do without an encoded ID or image
+      // Get profile identifier from the matched contact's URL
+      const profileId = extractProfileId(matched.linkedin_url);
+      if (!profileId && !sidebarImg) continue; // nothing we can do without a profile ID or image
 
       let enrichment = {};
-      if (encodedId) {
-        const voyager = await fetchVoyagerProfile(encodedId);
+      if (profileId) {
+        const voyager = await fetchVoyagerProfile(profileId);
         enrichment = buildEnrichmentPayload(voyager);
         // Use readable slug if available
         if (voyager?.publicIdentifier) {
