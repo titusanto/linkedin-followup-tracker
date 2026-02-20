@@ -11,14 +11,14 @@ export default async function SettingsPage() {
   if (!user) redirect("/auth/login");
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
-      <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-1">Settings</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    <div className="p-8 max-w-2xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-1">Settings</h1>
+      <p className="text-sm text-gray-400 dark:text-gray-500 mb-8">
         Copy your User ID and paste it into the Chrome extension to connect.
       </p>
 
       {/* Primary: User ID — the only thing needed */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-7">
         <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">
           Your User ID
         </label>
@@ -34,12 +34,12 @@ export default async function SettingsPage() {
       </div>
 
       {/* How-to */}
-      <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800">
-        <p className="text-xs text-blue-700 dark:text-blue-300 font-semibold mb-2">How to connect the extension</p>
-        <ol className="text-xs text-blue-600 dark:text-blue-400 space-y-1.5 list-decimal list-inside">
+      <div className="mt-5 p-5 bg-[#0A66C2]/5 dark:bg-[#0A66C2]/10 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+        <p className="text-xs text-[#0A66C2] dark:text-blue-300 font-semibold mb-2">How to connect the extension</p>
+        <ol className="text-xs text-[#0A66C2]/80 dark:text-blue-400 space-y-1.5 list-decimal list-inside">
           <li>Click the <strong>Copy</strong> button next to your User ID above</li>
           <li>Click the LinkedFollow icon in your Chrome toolbar</li>
-          <li>Click the 📋 paste button — it fills automatically</li>
+          <li>Click the paste button — it fills automatically</li>
           <li>Click <strong>Connect</strong> — done!</li>
         </ol>
       </div>

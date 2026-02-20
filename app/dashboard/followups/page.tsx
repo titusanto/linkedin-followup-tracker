@@ -9,10 +9,10 @@ export default function FollowupsPage() {
   const { followups, loading } = useFollowups();
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">Follow-ups Due</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+    <div className="p-8 max-w-7xl mx-auto">
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Follow-ups Due</h1>
+        <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
           Contacts with overdue or today&apos;s follow-up dates
         </p>
       </div>

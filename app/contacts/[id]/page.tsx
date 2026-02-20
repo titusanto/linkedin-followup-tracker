@@ -100,7 +100,7 @@ function StatusJourney({
   const isLost = status === "Lost";
 
   return (
-    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 mb-4">
+    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-6 mb-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Journey</h2>
         {isLost && (
@@ -136,8 +136,8 @@ function StatusJourney({
                     isDone
                       ? `${cfg.bg} border-transparent`
                       : isCurrent
-                      ? `${cfg.muted} border-current ${cfg.color}`
-                      : "bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-40"
+                      ? `${cfg.muted} border-dashed border-current ${cfg.color}`
+                      : "bg-transparent border-dashed border-gray-200 dark:border-gray-700 opacity-50"
                   }`}
                 >
                   <Icon
@@ -165,8 +165,8 @@ function StatusJourney({
                 <div
                   className={`flex-shrink-0 h-0.5 w-4 mx-0.5 transition-colors ${
                     !isLost && currentIdx > idx
-                      ? "bg-green-400"
-                      : "bg-gray-200 dark:bg-gray-700"
+                      ? "bg-[#0A66C2]"
+                      : "border-t border-dashed border-gray-200 dark:border-gray-700 bg-transparent"
                   }`}
                 />
               )}
@@ -183,7 +183,7 @@ function StatusJourney({
             <button
               key={s}
               onClick={() => onChange(s)}
-              className={`text-xs font-semibold px-3 py-1.5 rounded-full border-2 transition-all ${
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border-2 border-dashed transition-all ${
                 status === s
                   ? `${cfg.muted} ${cfg.color} border-current`
                   : "border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-400"
@@ -319,7 +319,7 @@ export default function ContactDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full py-32">
-        <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+        <Loader2 className="w-6 h-6 animate-spin text-[#0A66C2]" />
       </div>
     );
   }
@@ -336,9 +336,9 @@ export default function ContactDetailPage() {
   ].filter((e) => e.ts !== null);
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <div className="max-w-2xl mx-auto px-6 py-10">
       {/* Back + Delete */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-8">
         <Link
           href="/dashboard"
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 dark:hover:text-white"
@@ -375,7 +375,7 @@ export default function ContactDetailPage() {
       </div>
 
       {/* Header card */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 mb-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-7 mb-5">
         <div className="flex items-start gap-4">
           {contact.profile_image ? (
             <Image
@@ -386,8 +386,8 @@ export default function ContactDetailPage() {
               className="w-16 h-16 rounded-full object-cover flex-shrink-0"
             />
           ) : (
-            <div className="w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0">
-              <span className="text-blue-700 dark:text-blue-300 font-bold text-xl">
+            <div className="w-16 h-16 rounded-full bg-[#0A66C2]/10 dark:bg-[#0A66C2]/20 border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center flex-shrink-0">
+              <span className="text-[#0A66C2] dark:text-blue-300 font-bold text-xl">
                 {contact.name.charAt(0)}
               </span>
             </div>
@@ -413,7 +413,7 @@ export default function ContactDetailPage() {
               href={contact.linkedin_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 mt-2 text-xs text-blue-600 hover:underline"
+              className="inline-flex items-center gap-1 mt-2 text-xs text-[#0A66C2] hover:underline"
             >
               View LinkedIn profile <ExternalLink className="w-3 h-3" />
             </a>
@@ -430,7 +430,7 @@ export default function ContactDetailPage() {
 
       {/* Activity Timeline */}
       {timelineItems.length > 0 && (
-        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 mb-4">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-6 mb-5">
           <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Activity</h2>
           <div className="space-y-3">
             {timelineItems.map((e, i) => (
@@ -451,7 +451,7 @@ export default function ContactDetailPage() {
       )}
 
       {/* Edit form */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 space-y-5">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-6 space-y-6">
         <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Details</h2>
 
         {/* Timestamps */}
@@ -463,7 +463,7 @@ export default function ContactDetailPage() {
             </label>
             <input type="datetime-local" value={connectedAt}
               onChange={(e) => setConnectedAt(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
+              className="w-full px-3 py-2 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -472,7 +472,7 @@ export default function ContactDetailPage() {
             </label>
             <input type="datetime-local" value={lastMessagedAt}
               onChange={(e) => setLastMessagedAt(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
+              className="w-full px-3 py-2 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -481,7 +481,7 @@ export default function ContactDetailPage() {
             </label>
             <input type="datetime-local" value={lastRepliedAt}
               onChange={(e) => setLastRepliedAt(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
+              className="w-full px-3 py-2 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -490,7 +490,7 @@ export default function ContactDetailPage() {
             </label>
             <input type="datetime-local" value={viewedProfileAt}
               onChange={(e) => setViewedProfileAt(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
+              className="w-full px-3 py-2 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white" />
           </div>
         </div>
 
@@ -505,18 +505,18 @@ export default function ContactDetailPage() {
               type="date"
               value={nextFollowup}
               onChange={(e) => setNextFollowup(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+              className="px-3 py-2 text-sm border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
             />
             <span className="text-xs text-gray-400">or:</span>
             {[1, 2, 3, 5, 7].map((d) => (
               <button key={d} onClick={() => suggestFollowup(d)}
-                className="text-xs px-2.5 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 hover:bg-blue-100 transition-colors">
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-[#0A66C2]/5 dark:bg-[#0A66C2]/10 text-[#0A66C2] dark:text-blue-300 border border-dashed border-gray-200 dark:border-gray-700 hover:bg-[#0A66C2]/10 transition-colors">
                 +{d}d
               </button>
             ))}
           </div>
           {nextFollowup && (
-            <div className="mt-2 flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-3 py-2 rounded-xl">
+            <div className="mt-2 flex items-center gap-2 text-sm text-[#0A66C2] dark:text-blue-300 bg-[#0A66C2]/5 dark:bg-[#0A66C2]/10 border border-dashed border-gray-200 dark:border-gray-700 px-3 py-2 rounded-xl">
               <Clock className="w-4 h-4 flex-shrink-0" />
               <span>Follow-up on <strong>{fmtDate(nextFollowup)}</strong></span>
             </div>
@@ -529,13 +529,13 @@ export default function ContactDetailPage() {
             <label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
               placeholder="their@email.com"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400" />
+              className="w-full px-3 py-2 text-sm border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Phone</label>
             <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
               placeholder="+1 234 567 8900"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400" />
+              className="w-full px-3 py-2 text-sm border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400" />
           </div>
         </div>
 
@@ -547,7 +547,7 @@ export default function ContactDetailPage() {
             onChange={(e) => setNotes(e.target.value)}
             rows={4}
             placeholder="Add notes about this contact, conversation details, context..."
-            className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 resize-none"
+            className="w-full px-3 py-2 text-sm border border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 resize-none"
           />
         </div>
 
@@ -555,7 +555,7 @@ export default function ContactDetailPage() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors disabled:opacity-60"
+          className="w-full flex items-center justify-center gap-2 bg-[#0A66C2] hover:bg-[#004182] text-white font-semibold py-3.5 rounded-xl text-sm transition-colors disabled:opacity-60"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Save Changes
