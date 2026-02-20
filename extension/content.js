@@ -1,5 +1,5 @@
 /**
- * LinkedFollow Content Script v2.7
+ * LinkedFollow Content Script v2.8
  * Runs on: https://www.linkedin.com/*
  */
 
@@ -83,6 +83,98 @@
         showToast(res?.error || "Save failed", "error");
       }
     });
+  }
+
+  // ─── Voyager API enrichment ────────────────────────────────────────────────
+  // LinkedIn's internal API returns headline, location, profile image, and
+  // publicIdentifier (readable slug) for any encoded profile ID (ACoAAXXX).
+  // This lets us enrich contacts from the messaging page without visiting
+  // their profile page.
+  const _voyagerCache = {};  // encodedId → { headline, location, publicIdentifier, profileImageUrl }
+
+  async function fetchVoyagerProfile(encodedId) {
+    if (!encodedId || !encodedId.startsWith("ACo")) return null;
+    if (_voyagerCache[encodedId]) return _voyagerCache[encodedId];
+
+    try {
+      const csrfCookie = document.cookie.split(";").map(c => c.trim())
+        .find(c => c.startsWith("JSESSIONID="));
+      const csrfToken = csrfCookie ? csrfCookie.split("=")[1].replace(/"/g, "") : "";
+      if (!csrfToken) return null;
+
+      const url = "/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity="
+        + encodedId
+        + "&decorationId=com.linkedin.voyager.dash.deco.identity.profile.WebTopCardCore-18";
+
+      const res = await fetch(url, {
+        headers: {
+          "csrf-token": csrfToken,
+          "accept": "application/vnd.linkedin.normalized+json+2.1",
+        },
+      });
+      if (res.status !== 200) return null;
+
+      const data = await res.json();
+      const items = data?.included || [];
+      const profile = items.find(i => i?.firstName && i?.headline);
+      if (!profile) return null;
+
+      // Build profile image URL from vectorImage artifacts
+      let profileImageUrl = null;
+      const vec = profile.profilePicture?.displayImageReference?.vectorImage;
+      if (vec?.rootUrl && vec?.artifacts?.length) {
+        // Pick 200px or largest available
+        const sorted = [...vec.artifacts].sort((a, b) => (b.width || 0) - (a.width || 0));
+        const pick = sorted.find(a => (a.width || 0) <= 400) || sorted[sorted.length - 1];
+        if (pick?.fileIdentifyingUrlPathSegment) {
+          profileImageUrl = vec.rootUrl + pick.fileIdentifyingUrlPathSegment;
+        }
+      }
+
+      // Get location from Geo included item
+      const geoItem = items.find(i =>
+        i["$type"]?.includes("Geo") && i.defaultLocalizedNameWithoutCountryName
+      );
+
+      const result = {
+        headline: profile.headline || null,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        location: geoItem?.defaultLocalizedName || null,
+        publicIdentifier: profile.publicIdentifier || null,
+        profileImageUrl,
+      };
+
+      _voyagerCache[encodedId] = result;
+      console.log("[LF] Voyager enrichment:", result.firstName, result.lastName,
+        "→", result.headline?.substring(0, 50), "| loc:", result.location);
+      return result;
+    } catch (err) {
+      console.warn("[LF] Voyager fetch failed:", err.message);
+      return null;
+    }
+  }
+
+  // Helper: extract the encoded profile ID from a /in/ACoAAXXX URL
+  function extractEncodedId(url) {
+    if (!url) return null;
+    const m = url.match(/\/in\/(ACo[A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  }
+
+  // Helper: build enrichment fields from Voyager data for saveContact
+  function buildEnrichmentPayload(voyagerData) {
+    if (!voyagerData) return {};
+    const payload = {};
+    if (voyagerData.headline) {
+      // Use headline as role; extract company if "at Company" pattern exists
+      payload.role = voyagerData.headline;
+      const atMatch = voyagerData.headline.match(/\bat\s+(.+?)(?:\s*\||$)/i);
+      if (atMatch) payload.company = atMatch[1].trim();
+    }
+    if (voyagerData.location) payload.location = voyagerData.location;
+    if (voyagerData.profileImageUrl) payload.profile_image = voyagerData.profileImageUrl;
+    return payload;
   }
 
   // ─── Extract profile data from a /in/ page ────────────────────────────────
@@ -592,6 +684,36 @@
     return { linkedinUrl: null, name: null };
   }
 
+  // ─── Get profile image from messaging sidebar or thread ───────────────────
+  // Looks at the sidebar conversation list items and thread header for a
+  // profile-displayphoto image matching the given name.
+  function getProfileImageFromMessaging(contactName) {
+    if (!contactName) return null;
+    const firstName = contactName.split(" ")[0];
+
+    // 1. Check sidebar conversation items
+    const convos = document.querySelectorAll(".msg-conversation-listitem");
+    for (const convo of convos) {
+      const nameEl = convo.querySelector('[class*="participant-names"]') || convo.querySelector("h3");
+      const name = nameEl?.textContent?.trim();
+      if (!name) continue;
+      if (name === contactName || name.split(" ")[0] === firstName) {
+        const img = convo.querySelector(".presence-entity img, img");
+        if (img?.src && img.src.includes("licdn.com") && !img.src.startsWith("data:")) {
+          return img.src;
+        }
+      }
+    }
+
+    // 2. Check thread header entity lockup
+    const lockup = document.querySelector(".msg-entity-lockup img, .msg-selectable-entity img");
+    if (lockup?.src && lockup.src.includes("licdn.com") && !lockup.src.startsWith("data:")) {
+      return lockup.src;
+    }
+
+    return null;
+  }
+
   // ─── Main click handler ────────────────────────────────────────────────────
   document.addEventListener("click", (e) => {
     const pathAtClick = window.location.pathname;
@@ -606,32 +728,48 @@
     // ── Send (actual message sent) ─────────────────────────────────────────
     if (kind === "send") {
       const recipient = getComposeRecipient(el);
+      let recipientUrl = recipient?.linkedin_url || null;
+      let recipientName = recipient?.name || null;
 
-      if (recipient?.linkedin_url) {
-        console.log("[LF] ✓ Message SENT (overlay) →", recipient.linkedin_url);
-        showPendingToast(`💬 Tracking message to ${recipient.name || "contact"}…`);
-        setTimeout(() => saveContact({
-          linkedin_url: recipient.linkedin_url,
-          name: recipient.name || "Unknown",
+      if (!recipientUrl && isMessagingPage()) {
+        const p = getMessagingParticipant();
+        recipientUrl = p?.linkedinUrl || null;
+        recipientName = recipientName || p?.name || null;
+      }
+
+      if (!recipientUrl) {
+        console.warn("[LF] Send clicked but couldn't identify recipient");
+        return;
+      }
+
+      console.log("[LF] ✓ Message SENT →", recipientUrl);
+      showPendingToast(`💬 Tracking message to ${recipientName || "contact"}…`);
+
+      // Enrich via Voyager API (async, non-blocking) then save
+      setTimeout(async () => {
+        const encodedId = extractEncodedId(recipientUrl);
+        const voyager = await fetchVoyagerProfile(encodedId);
+        const enrichment = buildEnrichmentPayload(voyager);
+
+        // Use readable slug URL if available from Voyager
+        let finalUrl = recipientUrl;
+        if (voyager?.publicIdentifier) {
+          finalUrl = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+        }
+
+        // Also try to grab profile image from sidebar/thread if Voyager didn't have one
+        if (!enrichment.profile_image) {
+          enrichment.profile_image = getProfileImageFromMessaging(recipientName);
+        }
+
+        saveContact({
+          linkedin_url: finalUrl,
+          name: recipientName || "Unknown",
           status: "Messaged",
           last_messaged_at: now,
-        }, `💬 Message to ${recipient.name || "contact"} tracked!`), 300);
-
-      } else if (isMessagingPage()) {
-        const { name, linkedinUrl } = getMessagingParticipant();
-        if (linkedinUrl) {
-          console.log("[LF] ✓ Message SENT (thread) →", linkedinUrl);
-          showPendingToast(`💬 Tracking message to ${name || "contact"}…`);
-          setTimeout(() => saveContact({
-            linkedin_url: linkedinUrl,
-            name: name || "Unknown",
-            status: "Messaged",
-            last_messaged_at: now,
-          }, `💬 Message to ${name || "contact"} tracked!`), 300);
-        } else {
-          console.warn("[LF] Send clicked but couldn't identify recipient");
-        }
-      }
+          ...enrichment,
+        }, `💬 Message to ${recipientName || "contact"} tracked!`);
+      }, 300);
       return;
     }
 
@@ -777,7 +915,7 @@
     lastInboundCount = countInboundMessages(container);
 
     replyObserver?.disconnect();
-    replyObserver = new MutationObserver(() => {
+    replyObserver = new MutationObserver(async () => {
       const n = countInboundMessages(container);
       if (n > lastInboundCount) {
         lastInboundCount = n;
@@ -788,11 +926,24 @@
         const name = cleanMsgName(headerLink?.textContent);
         if (linkedinUrl) {
           detectedReplies.add(linkedinUrl);
+          // Enrich via Voyager API
+          const encodedId = extractEncodedId(href);
+          const voyager = await fetchVoyagerProfile(encodedId);
+          const enrichment = buildEnrichmentPayload(voyager);
+          let finalUrl = linkedinUrl;
+          if (voyager?.publicIdentifier) {
+            finalUrl = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+            detectedReplies.add(finalUrl);
+          }
+          if (!enrichment.profile_image) {
+            enrichment.profile_image = getProfileImageFromMessaging(name);
+          }
           saveContact({
-            linkedin_url: linkedinUrl,
+            linkedin_url: finalUrl,
             name: name || "Unknown",
             status: "Replied",
             last_replied_at: new Date().toISOString(),
+            ...enrichment,
           }, `↩️ Reply from ${name || "contact"} tracked!`);
         }
       }
@@ -802,7 +953,7 @@
   }
 
   // ── Strategy 3: On-open thread check — detect reply that already arrived ──
-  function checkOpenThreadForReply() {
+  async function checkOpenThreadForReply() {
     const container = document.querySelector(".msg-s-message-list-content");
     if (!container) return;
 
@@ -831,11 +982,26 @@
       const name = cleanMsgName(headerLink?.textContent);
       detectedReplies.add(linkedinUrl);
       console.log("[LF] ✓ Reply detected (on-open):", name, linkedinUrl);
+
+      // Enrich via Voyager API
+      const encodedId = extractEncodedId(href);
+      const voyager = await fetchVoyagerProfile(encodedId);
+      const enrichment = buildEnrichmentPayload(voyager);
+      let finalUrl = linkedinUrl;
+      if (voyager?.publicIdentifier) {
+        finalUrl = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+        detectedReplies.add(finalUrl);
+      }
+      if (!enrichment.profile_image) {
+        enrichment.profile_image = getProfileImageFromMessaging(name);
+      }
+
       saveContact({
-        linkedin_url: linkedinUrl,
+        linkedin_url: finalUrl,
         name: name || "Unknown",
         status: "Replied",
         last_replied_at: new Date().toISOString(),
+        ...enrichment,
       }, `↩️ Reply from ${name || "contact"} tracked!`);
       // Remove from messaged list so we don't re-detect
       messagedContacts = messagedContacts.filter(c => c.linkedin_url !== linkedinUrl);
@@ -904,11 +1070,33 @@
       // We have a match! This person replied.
       detectedReplies.add(matchedContact.linkedin_url);
       console.log("[LF] ✓ Reply detected (sidebar scan):", fullName, matchedContact.linkedin_url);
+
+      // Extract profile image from sidebar item
+      let sidebarImg = null;
+      const img = convo.querySelector(".presence-entity img, img");
+      if (img?.src && img.src.includes("licdn.com") && !img.src.startsWith("data:")) {
+        sidebarImg = img.src;
+      }
+
+      // Enrich via Voyager API (use encoded ID from matched contact URL)
+      const encodedId = extractEncodedId(matchedContact.linkedin_url);
+      const voyager = await fetchVoyagerProfile(encodedId);
+      const enrichment = buildEnrichmentPayload(voyager);
+      let finalUrl = matchedContact.linkedin_url;
+      if (voyager?.publicIdentifier) {
+        finalUrl = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+        detectedReplies.add(finalUrl);
+      }
+      if (!enrichment.profile_image && sidebarImg) {
+        enrichment.profile_image = sidebarImg;
+      }
+
       saveContact({
-        linkedin_url: matchedContact.linkedin_url,
+        linkedin_url: finalUrl,
         name: fullName || matchedContact.name,
         status: "Replied",
         last_replied_at: new Date().toISOString(),
+        ...enrichment,
       }, `↩️ Reply from ${fullName || "contact"} tracked!`);
       // Remove from messaged list so we don't re-detect
       messagedContacts = messagedContacts.filter(c => c.linkedin_url !== matchedContact.linkedin_url);
@@ -1148,12 +1336,25 @@
         if (recipient?.linkedin_url) {
           console.log("[LF] ✓ Message SENT (shadow overlay) →", recipient.linkedin_url);
           showPendingToast(`💬 Tracking message to ${recipient.name || "contact"}…`);
-          setTimeout(() => saveContact({
-            linkedin_url: recipient.linkedin_url,
-            name: recipient.name || "Unknown",
-            status: "Messaged",
-            last_messaged_at: now,
-          }, `💬 Message to ${recipient.name || "contact"} tracked!`), 300);
+          setTimeout(async () => {
+            const encodedId = extractEncodedId(recipient.linkedin_url);
+            const voyager = await fetchVoyagerProfile(encodedId);
+            const enrichment = buildEnrichmentPayload(voyager);
+            let finalUrl = recipient.linkedin_url;
+            if (voyager?.publicIdentifier) {
+              finalUrl = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+            }
+            if (!enrichment.profile_image) {
+              enrichment.profile_image = getProfileImageFromMessaging(recipient.name);
+            }
+            saveContact({
+              linkedin_url: finalUrl,
+              name: recipient.name || "Unknown",
+              status: "Messaged",
+              last_messaged_at: now,
+              ...enrichment,
+            }, `💬 Message to ${recipient.name || "contact"} tracked!`);
+          }, 300);
         } else {
           console.warn("[LF] Shadow send clicked but couldn't identify recipient");
         }
@@ -1197,6 +1398,8 @@
       if (isMessagingPage()) {
         setTimeout(watchForReplies, 1500);
         setTimeout(() => { checkOpenThreadForReply(); scanMessagingSidebar(); }, 3000);
+        messagingEnrichmentDone = false; // allow re-enrichment on navigation
+        setTimeout(enrichMessagingContacts, 5000);
       }
       if (isProfilePage()) {
         setTimeout(checkProfileForAcceptance, 1500);
@@ -1270,6 +1473,104 @@
     });
   }
 
+  // ─── Proactive Messaging Enrichment ──────────────────────────────────────
+  // When on the messaging page, scan all sidebar conversations and enrich
+  // tracked contacts that are missing role/company/image via the Voyager API.
+  // This runs once on page load after a delay.
+  let messagingEnrichmentDone = false;
+  async function enrichMessagingContacts() {
+    if (!isMessagingPage() || messagingEnrichmentDone) return;
+    messagingEnrichmentDone = true;
+
+    // Load ALL tracked contacts (not just "Messaged")
+    let allContacts = [];
+    try {
+      const res = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: "FETCH_CONTACTS" }, resolve);
+      });
+      if (res?.success) allContacts = res.data || [];
+    } catch (_) { return; }
+
+    // Filter to contacts missing role/company or profile_image
+    const needsEnrichment = allContacts.filter(c =>
+      (!c.role && !c.company) || !c.profile_image
+    );
+    if (needsEnrichment.length === 0) return;
+    console.log("[LF] Enriching", needsEnrichment.length, "contacts from messaging page");
+
+    // Build a name→contact map for matching against sidebar items
+    const byName = new Map();
+    for (const c of needsEnrichment) {
+      if (!c.name) continue;
+      const clean = c.name.replace(/\s*(Status is .+|Active now|Mobile\s*[•·].*|Last active .+|Reachable via .+)$/i, "").trim();
+      byName.set(clean, c);
+      byName.set(clean.split(" ").slice(0, 2).join(" "), c);
+    }
+
+    // Scan sidebar conversation items
+    const convos = document.querySelectorAll(".msg-conversation-listitem");
+    let enriched = 0;
+    for (const convo of convos) {
+      if (enriched >= 10) break; // rate limit — max 10 API calls per scan
+
+      const nameEl = convo.querySelector('[class*="participant-names"]') || convo.querySelector("h3");
+      const sidebarName = nameEl?.textContent?.trim();
+      if (!sidebarName) continue;
+
+      // Find matching tracked contact
+      const matched = byName.get(sidebarName) || byName.get(sidebarName.split(" ").slice(0, 2).join(" "));
+      if (!matched) continue;
+
+      // Extract profile image from sidebar
+      let sidebarImg = null;
+      const img = convo.querySelector(".presence-entity img, img");
+      if (img?.src && img.src.includes("licdn.com") && !img.src.startsWith("data:")) {
+        sidebarImg = img.src;
+      }
+
+      // Get the encoded profile ID — try from the matched contact's URL, or try opening the thread
+      const encodedId = extractEncodedId(matched.linkedin_url);
+      if (!encodedId && !sidebarImg) continue; // nothing we can do without an encoded ID or image
+
+      let enrichment = {};
+      if (encodedId) {
+        const voyager = await fetchVoyagerProfile(encodedId);
+        enrichment = buildEnrichmentPayload(voyager);
+        // Use readable slug if available
+        if (voyager?.publicIdentifier) {
+          matched.linkedin_url = "https://www.linkedin.com/in/" + voyager.publicIdentifier + "/";
+        }
+      }
+
+      if (!enrichment.profile_image && sidebarImg) {
+        enrichment.profile_image = sidebarImg;
+      }
+
+      // Only save if we have new data to add
+      const hasNewData = (enrichment.role && !matched.role) ||
+                         (enrichment.company && !matched.company) ||
+                         (enrichment.location && !matched.location) ||
+                         (enrichment.profile_image && !matched.profile_image);
+      if (!hasNewData) continue;
+
+      console.log("[LF] Enriching:", matched.name, "→", enrichment.role?.substring(0, 40));
+      saveContact({
+        linkedin_url: matched.linkedin_url,
+        name: sidebarName || matched.name,
+        status: "Pending", // lowest rank — API keeps existing status
+        ...enrichment,
+      });
+      enriched++;
+
+      // Small delay between API calls to avoid rate limiting
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (enriched > 0) {
+      console.log("[LF] Enriched", enriched, "contacts from messaging sidebar");
+    }
+  }
+
   // ─── Init ──────────────────────────────────────────────────────────────────
   setTimeout(loadPendingContacts, 2000);
   // Reply detection init is handled above (watchForReplies + loadMessagedContacts + sidebar scan)
@@ -1277,8 +1578,11 @@
     setTimeout(checkProfileForAcceptance, 2500);
     setTimeout(enrichProfileIfTracked, 4000);
   }
+  if (isMessagingPage()) {
+    setTimeout(enrichMessagingContacts, 5000); // enrich after reply detection init
+  }
   if (location.pathname.startsWith("/mynetwork"))     setTimeout(scanMyNetworkPage,         2000);
   if (location.pathname.startsWith("/notifications")) setTimeout(scanNotificationsPage,     2000);
 
-  console.log("[LF] v2.7 loaded on", location.pathname);
+  console.log("[LF] v2.8 loaded on", location.pathname);
 })();
