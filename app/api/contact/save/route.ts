@@ -188,6 +188,43 @@ export async function POST(request: Request) {
       );
     }
 
+    // ── Cleanup: merge & delete duplicate records with same name but different URL ─
+    // LinkedIn uses encoded IDs (/in/ACoAA...) in messaging and readable slugs
+    // (/in/name-123/) on profile pages. This causes duplicate records.
+    // After saving, find and merge any other records for the same person.
+    if (data && payload.name) {
+      const cleanName = payload.name.split(" ").slice(0, 2).join(" ");
+      const { data: dupes } = await supabase
+        .from("contacts")
+        .select("*")
+        .eq("user_id", userId)
+        .ilike("name", `${cleanName}%`)
+        .neq("id", data.id);
+
+      if (dupes && dupes.length > 0) {
+        for (const dupe of dupes) {
+          // Merge any data the duplicate has that the primary record doesn't
+          const mergeFields: Record<string, unknown> = {};
+          if (!data.last_messaged_at && dupe.last_messaged_at) mergeFields.last_messaged_at = dupe.last_messaged_at;
+          if (!data.last_replied_at && dupe.last_replied_at) mergeFields.last_replied_at = dupe.last_replied_at;
+          if (!data.connection_sent_at && dupe.connection_sent_at) mergeFields.connection_sent_at = dupe.connection_sent_at;
+          if (!data.next_followup && dupe.next_followup) mergeFields.next_followup = dupe.next_followup;
+          if (!data.role && dupe.role) mergeFields.role = dupe.role;
+          if (!data.company && dupe.company) mergeFields.company = dupe.company;
+          if (!data.location && dupe.location) mergeFields.location = dupe.location;
+          if (!data.profile_image && dupe.profile_image) mergeFields.profile_image = dupe.profile_image;
+          // Keep the higher status
+          if (statusRank(dupe.status) > statusRank(data.status)) mergeFields.status = dupe.status;
+
+          if (Object.keys(mergeFields).length > 0) {
+            await supabase.from("contacts").update(mergeFields).eq("id", data.id);
+          }
+          // Delete the duplicate
+          await supabase.from("contacts").delete().eq("id", dupe.id);
+        }
+      }
+    }
+
     return NextResponse.json<ApiResponse<Contact>>(
       { data },
       { status: 200, headers: hdrs }
